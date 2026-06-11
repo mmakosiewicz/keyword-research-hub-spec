@@ -24,7 +24,7 @@ A single JSON file with this shape:
       "volume": "415000",
       "kd": "89",
       "position": "23",
-      "url": "https://ahrefs.com/blog/what-is-seo/",
+      "url": "https://example.com/blog/what-is-seo/",
       "traffic_potential": "288",
       "tabs": "Tracker, Gap, Discovery",
       "nearest_cluster": 6,
