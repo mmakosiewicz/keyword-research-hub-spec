@@ -1,0 +1,100 @@
+{
+  "results": [
+    {
+      "keyword": "seo",
+      "list": "backlog",
+      "volume": "415000",
+      "kd": "89",
+      "position": "23",
+      "url": "https://example.com/blog/what-is-seo/",
+      "traffic_potential": "288",
+      "tabs": "Tracker, Gap, Discovery",
+      "nearest_cluster": 6,
+      "nearest_cluster_name": "SEO Strategy and Performance",
+      "distance": 0.2012,
+      "avg_distance": 0.5897,
+      "is_in_core": true,
+      "tier": 1,
+      "bp": 1
+    },
+    {
+      "keyword": "keyword research",
+      "list": "maybe",
+      "volume": "157000",
+      "kd": "94",
+      "position": "",
+      "url": "https://example.com/blog/category/keyword-research/",
+      "traffic_potential": "131",
+      "tabs": "Tracker",
+      "nearest_cluster": 13,
+      "nearest_cluster_name": "Keyword Research Basics",
+      "distance": 0.1639,
+      "avg_distance": 0.6308,
+      "is_in_core": true,
+      "tier": 1,
+      "bp": 2
+    },
+    {
+      "keyword": "local seo",
+      "list": "backlog",
+      "volume": "47000",
+      "kd": "0",
+      "position": "",
+      "url": "",
+      "traffic_potential": "",
+      "tabs": "Tracker",
+      "nearest_cluster": 6,
+      "nearest_cluster_name": "SEO Strategy and Performance",
+      "distance": 0.1402,
+      "avg_distance": 0.591,
+      "is_in_core": true,
+      "tier": 1,
+      "bp": 2
+    },
+    {
+      "keyword": "linkbait",
+      "list": "rejected",
+      "volume": "150",
+      "kd": "12",
+      "position": "",
+      "url": "",
+      "tabs": "Discovery",
+      "nearest_cluster": 22,
+      "nearest_cluster_name": "Link Building Tactics",
+      "distance": 0.4801,
+      "avg_distance": 0.7102,
+      "is_in_core": false,
+      "tier": 3,
+      "bp": 3
+    },
+    {
+      "keyword": "ahrefs alternative",
+      "list": "maybe",
+      "volume": "2400",
+      "kd": "31",
+      "position": "11",
+      "url": "https://example.com/blog/seo-tools/",
+      "traffic_potential": "1850",
+      "tabs": "Tracker, Discovery",
+      "nearest_cluster": 8,
+      "nearest_cluster_name": "SEO Tools and Software",
+      "distance": 0.3215,
+      "avg_distance": 0.6411,
+      "is_in_core": true,
+      "tier": 2,
+      "bp": 1
+    }
+  ],
+  "clusters": [
+    { "id": 6,  "name": "SEO Strategy and Performance", "size": 142 },
+    { "id": 8,  "name": "SEO Tools and Software", "size": 87 },
+    { "id": 13, "name": "Keyword Research Basics", "size": 96 },
+    { "id": 22, "name": "Link Building Tactics", "size": 54 }
+  ],
+  "tier_labels": {
+    "1": "Core priority",
+    "2": "High value",
+    "3": "Long tail",
+    "4": "Speculative"
+  }
+}
