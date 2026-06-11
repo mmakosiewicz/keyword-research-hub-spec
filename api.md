@@ -57,7 +57,7 @@ All four return `{ "job_id": "<uuid>" }` immediately and run in a background thr
 - `POST /api/content_gap/run` → `{ "competitors": [...], "kw_per_competitor": 500 }`
   Either field optional; falls back to settings.
 - `POST /api/breakout/run` → `{}` (no body needed; uses settings)
-- `POST /api/targets/run` → `{ "tags": ["Mateusz", "Joshua Hardwick"] }`
+- `POST /api/targets/run` → `{ "tags": ["high-priority", "writer-a"] }`
 
 ## Master List
 
