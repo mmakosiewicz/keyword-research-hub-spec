@@ -8,7 +8,7 @@ The minimum surface the recreation needs. Method + path + JSON shape.
 Returns the full settings object:
 ```json
 {
-  "target_site": "ahrefs.com",
+  "target_site": "example.com",
   "target_country": "us",
   "competitors": ["semrush.com", "moz.com"],
   "filters": { "min_volume": 100, "max_kd": null, ... }
