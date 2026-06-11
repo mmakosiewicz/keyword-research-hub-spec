@@ -28,7 +28,7 @@ Per-candidate input (what the Ahrefs APIs return; structure depends on source):
 - `categories` (object) — `{category: string[], nsfw: string[]}` — only present on Keywords Explorer results
 
 Plus context:
-- `own_brand` (string) — derived from `target_site` (e.g. `"ahrefs"` from `"ahrefs.com"`)
+- `own_brand` (string) — derived from `target_site` (e.g. `"example"` from `"example.com"`)
 
 ## Algorithm
 
