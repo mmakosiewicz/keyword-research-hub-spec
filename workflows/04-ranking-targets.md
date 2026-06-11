@@ -5,7 +5,7 @@
 ## Inputs
 
 - A configured Rank Tracker `project_id` in Ahrefs.
-- A set of `tags` defined inside the Rank Tracker project (e.g. "High priority", "Project X", "Joshua Hardwick", "Q3 launch").
+- A set of `tags` defined inside the Rank Tracker project (e.g. "high-priority", "writer-a", "project-x", "q3-launch").
 - User-selected subset of tags for this run.
 
 ## Configuration endpoint
@@ -13,12 +13,12 @@
 `GET /api/targets/config` returns:
 ```json
 {
-  "project_id": "2286963",
-  "default_tags": ["Mateusz", "Joshua Hardwick", "Chris Haines", "Tim Soulo", "Freelancers"]
+  "project_id": "<your-rank-tracker-project-id>",
+  "default_tags": ["high-priority", "writer-a", "project-x"]
 }
 ```
 
-The default tags are stored as a constant in the app (in the reference implementation, in code). Could be promoted to settings later.
+The `project_id` and `default_tags` should be pulled from env vars or the `settings` table, **not hardcoded**. The reference implementation has them as in-code constants for convenience; that's a shortcut, not the pattern to imitate.
 
 ## Algorithm
 
@@ -36,7 +36,7 @@ GET https://api.ahrefs.com/v3/rank-tracker/keyword-rankings
 
 (See Ahrefs Rank Tracker v3 docs for exact field selection; this varies by plan.)
 
-Collect rank data per keyword. Same keyword across multiple tags → keep the rank from the first tag pull, but tag-merge the `tags` field: `tags = ["Mateusz", "High priority"]`.
+Collect rank data per keyword. Same keyword across multiple tags → keep the rank from the first tag pull, but tag-merge the `tags` field: `tags = ["writer-a", "high-priority"]`.
 
 ### Phase 2 — Build results
 
@@ -48,7 +48,7 @@ Collect rank data per keyword. Same keyword across multiple tags → keep the ra
   "position": ...,           # current rank
   "ranking_url": ...,
   "extra": {
-    "tags": ["Mateusz", "Joshua Hardwick"],
+    "tags": ["writer-a", "high-priority"],
     "best_position": ...,
     "traffic": ...,
   }
