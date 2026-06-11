@@ -13,7 +13,7 @@ A flat key/value bag for app config. Single-tenant; no user_id column.
 | updated_at | timestamptz | |
 
 Common keys:
-- `target_site` (string, e.g. `"ahrefs.com"`)
+- `target_site` (string, e.g. `"example.com"`)
 - `target_country` (string, ISO-2, e.g. `"us"`)
 - `competitors` (string[], e.g. `["semrush.com", "moz.com"]`)
 - `filters` (object — see [`filter-pipeline.md`](./filter-pipeline.md))
