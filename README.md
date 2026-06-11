@@ -35,6 +35,16 @@ Six interlocking workflows that share one filter pipeline and one keyword bank:
 - **Ahrefs API** — Keywords Explorer (`ke_ideas`) and Site Explorer (`organic_keywords`). The app cannot function without it. User provides credentials.
 - **A semantic clustering input file** — `keyword_tiers.json`. See [`workflows/05-tier-cluster.md`](./workflows/05-tier-cluster.md) for the schema. A sample is provided at [`sample-data/keyword_tiers.sample.json`](./sample-data/keyword_tiers.sample.json).
 
+## Secrets, IDs, and credentials
+
+**Anything that identifies a specific Ahrefs project, customer, team member, or environment is a secret.** Do not hardcode it in source. Sources of truth, in order of preference:
+
+1. Environment variables (`AHREFS_API_KEY`, `RANK_TRACKER_PROJECT_ID`, etc.)
+2. The `settings` table for user-configurable values (target domain, country, default tags, competitor list)
+3. A `.env.example` checked into the repo with placeholder values
+
+If you see a project ID, API key, real domain, or person's name in the spec or sample data, treat it as a placeholder — substitute your own.
+
 ## Definition of done
 
 A user can:
