@@ -1158,7 +1158,11 @@ def _run_targets_job(job_id, selected_tags, project_id):
                 pos_delta = 101
             elif prev_pos is not None:
                 pos_delta = -101
-            category = "update" if cur_pos is not None and 3 <= cur_pos <= 10 else "rewrite"
+            category = (
+                "update" if cur_pos is not None and 3 <= cur_pos <= 10
+                else "rewrite" if cur_pos is None or cur_pos >= 11
+                else None
+            )
             final_keywords[keyword] = {
                 "keyword": keyword, "volume": kw.get("volume") or 0,
                 "difficulty": kw.get("difficulty"),
@@ -1174,7 +1178,7 @@ def _run_targets_job(job_id, selected_tags, project_id):
             }
         filters = {"tags": selected_tags}
         update_count = sum(1 for d in final_keywords.values() if d["extra"]["category"] == "update")
-        rewrite_count = len(final_keywords) - update_count
+        rewrite_count = sum(1 for d in final_keywords.values() if d["extra"]["category"] == "rewrite")
         ranking = sum(1 for d in final_keywords.values() if d.get("position") is not None)
         sid, total, new_count = _save_session(
             "targets", filters, final_keywords, 0,
