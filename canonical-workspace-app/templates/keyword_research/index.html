@@ -173,19 +173,40 @@
         <div class="grid md:grid-cols-2 gap-3 mt-6">
           <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Target</div><div class="font-semibold mt-1" x-text="settings.target_site"></div><div class="text-sm text-slate-500" x-text="settings.target_country.toUpperCase()"></div></div>
           <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Initial core</div><div class="font-semibold mt-1" x-text="`${wizardCoreCount()} keywords`"></div><div class="text-sm text-slate-500" x-text="wizardCoreSourceLabel()"></div></div>
-          <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">BP judge</div><div class="font-semibold mt-1" x-text="tiersStatus.bp_models?.find(m=>m.id===tiersForm.bp_model)?.label || tiersForm.bp_model"></div><div class="text-sm text-slate-500">Full Tier + BP rebuild</div></div>
+          <div class="rounded-lg bg-slate-50 p-4">
+            <label class="text-xs uppercase font-bold text-slate-500 block">BP judge</label>
+            <select x-model="tiersForm.bp_model" :disabled="wizardGenerating" class="w-full mt-2 bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-60">
+              <template x-for="m in (tiersStatus.bp_models || [])" :key="m.id"><option :value="m.id" x-text="m.label"></option></template>
+            </select>
+            <div class="text-sm text-slate-500 mt-1">Full Tier + BP rebuild</div>
+          </div>
           <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Estimated model cost</div><div class="font-semibold mt-1" x-text="wizardEstimatedCost()"></div><div class="text-sm text-slate-500">Estimate only; provider prices can change.</div></div>
         </div>
         <div class="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">The core keywords and product description will be sent to your configured model provider. The initial run creates reusable centroids so future Master List additions can use Quick update.</div>
-        <p x-show="wizardError" class="text-sm text-red-600 mt-3" x-text="wizardError"></p>
+        <div x-show="wizardGenerating || wizardRun" x-cloak class="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="text-sm font-semibold text-slate-900" x-text="wizardRun?.status === 'failed' ? 'Generation failed' : wizardRun?.status === 'completed' ? 'Setup complete' : 'Generating tiers and BP…'"></div>
+              <div class="text-xs text-slate-500 mt-1" x-text="wizardProgressText()"></div>
+            </div>
+            <span x-show="wizardGenerating" class="w-5 h-5 rounded-full border-2 border-orange-200 border-t-orange-600 animate-spin"></span>
+          </div>
+          <div x-show="wizardGenerating" class="h-1.5 bg-slate-100 rounded-full overflow-hidden mt-3"><div class="h-full bg-orange-500 transition-all" :style="`width:${wizardProgressPercent()}%`"></div></div>
+        </div>
+        <div x-show="wizardError" x-cloak class="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+          <div class="text-sm font-semibold text-red-800">Couldn’t finish setup</div>
+          <p class="text-sm text-red-700 mt-1 whitespace-pre-wrap" x-text="wizardError"></p>
+          <div class="flex gap-2 mt-3"><button @click="setupWizardStep=3; wizardRun=null; wizardError=''" class="kr-toolbar-btn">Back to core</button><button @click="finishSetupWizard()" :disabled="wizardGenerating" class="kr-toolbar-btn">Retry</button></div>
+        </div>
       </section>
 
       <footer class="px-7 py-4 border-t border-slate-200 flex items-center justify-between bg-slate-50">
         <button x-show="setupWizardStep>1" @click="setupWizardStep--" class="kr-toolbar-btn">Back</button><span x-show="setupWizardStep===1"></span>
         <div class="flex gap-2">
-          <button x-show="setupWizardRerun" @click="setupWizardOpen=false" class="kr-toolbar-btn">Cancel</button>
+          <button x-show="setupWizardRerun && !wizardGenerating" @click="setupWizardOpen=false" class="kr-toolbar-btn">Cancel</button>
           <button x-show="setupWizardStep<4" @click="nextWizardStep()" :disabled="!wizardStepValid()" class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold disabled:opacity-40">Continue</button>
-          <button x-show="setupWizardStep===4" @click="finishSetupWizard()" :disabled="tierRunActive" class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold disabled:opacity-40">Approve &amp; generate</button>
+          <button x-show="setupWizardStep===4 && !wizardGenerating && wizardRun?.status !== 'completed'" @click="finishSetupWizard()" class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold">Approve &amp; generate</button>
+          <button x-show="setupWizardStep===4 && wizardGenerating" disabled class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold opacity-60">Generating…</button>
         </div>
       </footer>
     </div>
@@ -1520,6 +1541,9 @@ function keywordResearch() {
     wizardCsvName: '',
     wizardCompetitorsText: '',
     wizardError: '',
+    wizardGenerating: false,
+    wizardRun: null,
+    wizardPollTimer: null,
     settingsSaved: false,
     
     settings: {
@@ -1633,6 +1657,15 @@ function keywordResearch() {
       window.addEventListener('resize', () => {
         if (this.masterView === 'map') this.drawMasterMap();
       });
+      // Resume first-run setup generation after iframe reload.
+      const storedSetupRun = localStorage.getItem('kr_setup_run');
+      if (storedSetupRun && !this.settings.setup_completed) {
+        this.setupWizardOpen = true;
+        this.setupWizardStep = 4;
+        this.wizardGenerating = true;
+        this.wizardRun = {id:storedSetupRun,status:'running',step:'core',progress:{}};
+        this.pollWizardRun(storedSetupRun);
+      }
       // resume an in-flight tier generation after iframe reload
       const storedTierRun = localStorage.getItem('kr_tier_run');
       if (storedTierRun) {
@@ -1720,27 +1753,93 @@ function keywordResearch() {
       return `About $${estimate.toFixed(2)} for ${count.toLocaleString()} keywords`;
     },
 
+    wizardProgressText() {
+      const run = this.wizardRun;
+      if (!run) return 'Starting…';
+      if (run.status === 'failed') return run.error || 'Unknown generation error.';
+      if (run.status === 'completed') return 'Tiers, clusters and BP are ready.';
+      const labels = {core:'Validating core',candidates:'Collecting keywords',embed:'Creating semantic embeddings',cluster:'Building topic clusters',tier:'Assigning tiers',bp:'Scoring business potential',write:'Saving results'};
+      const base = labels[run.step] || 'Starting generation';
+      return run.progress?.total ? `${base} · ${(run.progress.done || 0).toLocaleString()} of ${run.progress.total.toLocaleString()}` : base;
+    },
+
+    wizardProgressPercent() {
+      const order = ['core','candidates','embed','cluster','tier','bp','write','done'];
+      const run = this.wizardRun;
+      if (!run) return 2;
+      if (run.status === 'completed') return 100;
+      const idx = Math.max(0, order.indexOf(run.step));
+      let value = (idx / (order.length - 1)) * 100;
+      if (run.progress?.total) value += (run.progress.done / run.progress.total) * (100 / (order.length - 1));
+      return Math.min(98, Math.max(3, value));
+    },
+
     async finishSetupWizard() {
+      if (this.wizardGenerating) return;
       this.wizardError = '';
-      if (!this.wizardStepValid()) return;
+      this.wizardRun = null;
       this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
       this.tiersForm.core_source = this.wizardCoreSource === 'csv' ? 'paste' : this.wizardCoreSource;
       if (this.wizardCoreSource !== 'rank_tracker') this.tiersForm.core_keywords = this.wizardCoreKeywords;
       this.tiersForm.bp = true;
-      const previousComplete = this.settings.setup_completed;
-      this.settings.setup_completed = true;
+      this.settings.setup_completed = false;
       await this.saveSettings();
-      await this.runTierGeneration('full');
-      if (this.tierRunError) {
-        this.settings.setup_completed = previousComplete || false;
-        await this.saveSettings();
-        this.wizardError = this.tierRunError;
-        return;
+      this.wizardGenerating = true;
+      try {
+        const res = await fetch(`${BASE}/api/tiers/run`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({...this.tiersForm, mode:'full'})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not start generation.');
+        this.wizardRun = {id:data.run_id,status:'queued',step:'core',progress:{}};
+        localStorage.setItem('kr_setup_run', data.run_id);
+        this.pollWizardRun(data.run_id);
+      } catch (e) {
+        this.wizardGenerating = false;
+        this.wizardError = e.message || String(e);
+        this.wizardRun = {status:'failed',error:this.wizardError};
       }
-      this.setupWizardOpen = false;
-      this.setupWizardRerun = false;
-      this.activeTab = 'master';
+    },
+
+    pollWizardRun(runId) {
+      clearInterval(this.wizardPollTimer);
+      const check = async () => {
+        try {
+          const res = await fetch(`${BASE}/api/tiers/run/${runId}`);
+          const run = await res.json();
+          if (!res.ok) throw new Error(run.error || 'Could not read generation status.');
+          this.wizardRun = run;
+          if (run.status === 'completed') {
+            clearInterval(this.wizardPollTimer);
+            localStorage.removeItem('kr_setup_run');
+            this.wizardGenerating = false;
+            this.settings.setup_completed = true;
+            await this.saveSettings();
+            await this.loadTiersStatus();
+            setTimeout(() => {
+              this.setupWizardOpen = false;
+              this.setupWizardRerun = false;
+              this.activeTab = 'master';
+              this.switchToMaster();
+            }, 700);
+          } else if (run.status === 'failed') {
+            clearInterval(this.wizardPollTimer);
+            localStorage.removeItem('kr_setup_run');
+            this.wizardGenerating = false;
+            this.settings.setup_completed = false;
+            this.wizardError = run.error || 'Generation failed.';
+            await this.saveSettings();
+          }
+        } catch (e) {
+          clearInterval(this.wizardPollTimer);
+          this.wizardGenerating = false;
+          this.wizardError = e.message || String(e);
+        }
+      };
+      check();
+      this.wizardPollTimer = setInterval(check, 1800);
     },
 
     async loadTargetsConfig() {
