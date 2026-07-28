@@ -422,22 +422,34 @@ def run_pipeline(run_id):
     mode = cfg.get("mode", "full")
     _update(run_id, status="running", step="core")
 
-    # 1. Core set. The normalized hash makes incremental updates safe: if the
-    # center moved, saved centroids are no longer valid and a full rebuild is required.
-    src = cfg.get("core_source", "lists")
-    if src == "rank_tracker":
-        core_kws = _core_from_rank_tracker(cfg["project_id"])
-    elif src == "paste":
-        core_kws = [k.strip() for k in cfg.get("core_keywords", []) if k.strip()]
+    # 1. Core set. Master List "update" uses the frozen model created by the
+    # setup wizard; it never depends on the current Manage tiers controls.
+    frozen_data = {}
+    if mode == "update":
+        if not os.path.exists(TIERS_OUT):
+            raise RuntimeError("Complete the setup wizard before updating Master List classifications.")
+        with open(TIERS_OUT) as f:
+            frozen_data = json.load(f)
+        frozen_meta = frozen_data.get("metadata") or {}
+        if not frozen_meta.get("centroids"):
+            raise RuntimeError("The saved model cannot be updated incrementally. Rerun the setup wizard once.")
+        core_kws = [r.get("keyword", "") for r in frozen_data.get("results", []) if r.get("is_in_core")]
+        core_hash = frozen_meta.get("core_hash")
     else:
-        core_kws = _core_from_lists(cfg.get("core_lists", ["pitch", "backlog", "maybe"]))
-    core_kws = sorted(set(core_kws), key=str.lower)
-    if len(core_kws) < 4:
-        raise RuntimeError(
-            f"Core set too small ({len(core_kws)} keywords). Need at least 4 — "
-            "add keywords to your lists, pick a Rank Tracker project, or paste more."
-        )
-    core_hash = hashlib.sha256("\n".join(k.lower() for k in core_kws).encode()).hexdigest()
+        src = cfg.get("core_source", "lists")
+        if src == "rank_tracker":
+            core_kws = _core_from_rank_tracker(cfg["project_id"])
+        elif src == "paste":
+            core_kws = [k.strip() for k in cfg.get("core_keywords", []) if k.strip()]
+        else:
+            core_kws = _core_from_lists(cfg.get("core_lists", ["pitch", "backlog", "maybe"]))
+        core_kws = sorted(set(core_kws), key=str.lower)
+        if len(core_kws) < 4:
+            raise RuntimeError(
+                f"Core set too small ({len(core_kws)} keywords). Need at least 4 — "
+                "add keywords to your lists, pick a Rank Tracker project, or paste more."
+            )
+        core_hash = hashlib.sha256("\n".join(k.lower() for k in core_kws).encode()).hexdigest()
     _update(run_id, step="candidates", progress={"core_count": len(core_kws)})
 
     # 2. Current keyword bank.
@@ -449,13 +461,16 @@ def run_pipeline(run_id):
     core_set = {k.lower() for k in core_kws}
 
     old_data, old_by_kw = {}, {}
-    if mode == "quick":
-        if not os.path.exists(TIERS_OUT):
-            raise RuntimeError("Run a Full rebuild before using Quick update.")
-        with open(TIERS_OUT) as f:
-            old_data = json.load(f)
+    if mode in ("quick", "update"):
+        if mode == "update":
+            old_data = frozen_data
+        else:
+            if not os.path.exists(TIERS_OUT):
+                raise RuntimeError("Run a Full rebuild before using Quick update.")
+            with open(TIERS_OUT) as f:
+                old_data = json.load(f)
         metadata = old_data.get("metadata") or {}
-        if metadata.get("core_hash") != core_hash:
+        if mode == "quick" and metadata.get("core_hash") != core_hash:
             raise RuntimeError("The core keyword set changed. Run a Full rebuild.")
         if not metadata.get("centroids"):
             raise RuntimeError("The saved model predates incremental updates. Run one Full rebuild.")
@@ -464,7 +479,7 @@ def run_pipeline(run_id):
                 or (cfg.get("bp") and old_by_kw[key].get("bp") is None)]
         if not keys:
             _update(run_id, status="completed", step="done",
-                    summary={"mode": "quick", "keywords": 0, "message": "Everything is already enriched."},
+                    summary={"mode": mode, "keywords": 0, "message": "Everything is already enriched."},
                     finished_at=datetime.now())
             return
         centroids = np.asarray(metadata["centroids"], dtype=np.float64)
@@ -528,7 +543,7 @@ def run_pipeline(run_id):
             "is_in_core": key in core_set, "tier": int(tiers[i]),
             "bp": bp.get(row["keyword"], previous.get("bp")),
         }
-    if mode == "quick":
+    if mode in ("quick", "update"):
         merged = {key: value for key, value in old_by_kw.items() if key in universe}
         merged.update(updated)
         results = list(merged.values())
@@ -536,7 +551,7 @@ def run_pipeline(run_id):
         results = list(updated.values())
 
     cluster_sizes = {c: sum(1 for row in results if int(row.get("nearest_cluster", -1)) == c) for c in range(k)}
-    previous_clusters = old_data.get("clusters", {}) if mode == "quick" else {}
+    previous_clusters = old_data.get("clusters", {}) if mode in ("quick", "update") else {}
     out = {
         "results": results,
         "clusters": {
