@@ -1408,6 +1408,17 @@ def tiers_status():
         and float(last_session_epoch) > file_status["mtime_epoch"]
     )
     settings = _load_settings()
+    update_model = settings.get("enrichment_bp_model") or _kr_tiers.DEFAULT_BP_MODEL
+    update_count = max(missing_tier, missing_bp)
+    per_6500 = {
+        "anthropic/claude-opus-5": 1.25,
+        "anthropic/claude-sonnet-5": 0.50,
+        "anthropic/claude-haiku-4.5": 0.25,
+        "openai/gpt-5.6-sol": 1.50,
+        "openai/gpt-5.6-luna": 0.15,
+    }.get(update_model, 1.25)
+    estimated_cost = round(max(0.01, (missing_bp / 6500) * per_6500 + (missing_tier / 6500) * 0.01), 2) if update_count else 0
+    model_label = _kr_tiers.BP_MODELS.get(update_model, update_model)
     return jsonify({
         "file": file_status,
         "latest_run": _kr_tiers.latest_run(),
@@ -1419,12 +1430,38 @@ def tiers_status():
         "missing_bp": missing_bp,
         "needs_enrichment": bool(missing_tier or missing_bp),
         "quick_available": quick_available,
+        "update_count": update_count,
+        "update_model": update_model,
+        "update_model_label": model_label,
+        "update_estimated_cost": estimated_cost,
         "bp_models": [{"id": k, "label": v} for k, v in _kr_tiers.BP_MODELS.items()],
         "default_bp_model": _kr_tiers.DEFAULT_BP_MODEL,
         "enrichment_product": settings.get("enrichment_product") or "",
         "enrichment_bp_model": settings.get("enrichment_bp_model") or _kr_tiers.DEFAULT_BP_MODEL,
         "enrichment_core_config": settings.get("enrichment_core_config") or {},
     })
+
+
+@blueprint.route("/api/master/update-enrichment", methods=["POST"])
+def master_update_enrichment():
+    """Update only missing Tier/BP rows using the frozen wizard model/config."""
+    settings = _load_settings()
+    product = (settings.get("enrichment_product") or "").strip()
+    model = settings.get("enrichment_bp_model") or _kr_tiers.DEFAULT_BP_MODEL
+    if not settings.get("setup_completed") or not product:
+        return jsonify({"error": "Complete the setup wizard before updating Master List classifications."}), 422
+    status = _kr_tiers.tier_file_status()
+    if not status.get("exists"):
+        return jsonify({"error": "The saved tier model is missing. Rerun the setup wizard."}), 422
+    config = {
+        "mode": "update", "bp": True, "bp_model": model, "product": product,
+        "include_nope": False, "threshold_mode": "fixed",
+        # The update worker intentionally ignores mutable Manage tiers controls
+        # and reads the frozen core + centroids from keyword_tiers.json.
+        "core_source": "frozen", "core_lists": [], "project_id": "", "core_keywords": [], "k": 0,
+    }
+    run_id = _kr_tiers.launch_run(config)
+    return jsonify({"run_id": run_id})
 
 
 @blueprint.route("/api/tiers/projects")
