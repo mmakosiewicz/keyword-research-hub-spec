@@ -1,0 +1,9 @@
+keyword,volume,kd,position,traffic_potential,url,source,core
+seo audit,12000,74,8,31000,https://example.com/seo-audit,Discovery,true
+keyword research,18000,82,12,46000,https://example.com/keyword-research,Tracker,true
+backlink analysis,6200,68,19,22000,https://example.com/backlinks,Gap,true
+rank tracking,5100,71,6,17000,https://example.com/rank-tracker,Tracker,true
+content gap analysis,1400,45,,6400,,Gap,false
+technical seo checklist,2900,58,31,8900,https://example.com/technical-seo,Breakout,false
+email marketing software,8100,76,,24000,,Discovery,false
+best running shoes,44000,63,,73000,,Discovery,false
