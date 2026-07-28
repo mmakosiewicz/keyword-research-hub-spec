@@ -4,7 +4,16 @@
 
 ## Product placement
 
-Tier generation is a setting/enrichment step, not a primary research workflow. It belongs behind **Manage tiers** in the product header.
+Tier and BP generation is part of completing the **Master List**, not a separate destination. **Manage tiers** remains an advanced configuration surface for choosing the core, model, and thresholds.
+
+Whenever Master List contains keywords with no Tier or BP, show an enrichment prompt with exact missing counts and two actions:
+
+- **Quick update** — classify only missing rows against the saved centroids/labels from the last full rebuild. Preserve all existing classifications.
+- **Full rebuild** — re-embed the complete bank, refit clusters, regenerate tiers, and rescore BP.
+
+Quick update is unavailable until one full rebuild has saved a reusable semantic model. If the normalized core set changes, Quick update must be blocked and a Full rebuild required. Never silently classify against stale core centroids.
+
+After enrichment, Master List shows a compact “fully enriched” state with an optional Rebuild all action.
 
 The result is consumed in the Master List, which has two views:
 
