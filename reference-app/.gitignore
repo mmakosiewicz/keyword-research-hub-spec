@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+instance/
+*.log
+*.csv
+!sample-keywords.csv
+keyword_tiers.json
+*.sql
+.pytest_cache/
