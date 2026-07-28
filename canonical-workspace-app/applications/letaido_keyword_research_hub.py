@@ -811,28 +811,47 @@ def _run_breakout_job(job_id, settings):
         scopes = content_paths if scope_mode == "paths" else [None]
         for idx, scope in enumerate(scopes):
             label = scope or "whole site"
-            _jobs[job_id]["progress"] = f"Fetching {label} keywords ranking 31–100…"
             try:
                 target = (f"https://{target_site.strip('/')}{scope}" if scope else target_site)
                 mode = "prefix" if scope else "subdomains"
-                result = _invoke_connector("ahrefs_site_explorer.organic_positions_export", {
-                    "target": target, "mode": mode, "country": country, "limit": 1000, "offset": 0,
-                    "filters": {"min_position": 31, "max_position": 100, "min_volume": min_volume or 0},
-                    "include_raw_csv": False,
-                })
-                successful_calls += 1
-                for row in result.get("records", []):
-                    kw = (row.get("keyword") or "").strip()
-                    if not kw: continue
-                    existing = candidates.get(kw)
-                    candidate = {"keyword": kw, "volume": row.get("volume") or 0,
-                        "difficulty": row.get("difficulty"), "cpc_cents": int(float(row.get("cpc") or 0)*100),
-                        "position": row.get("position"), "ranking_url": row.get("url") or "",
-                        "content_scope": scope or "whole_site"}
-                    if not existing or (candidate.get("position") or 999) < (existing.get("position") or 999):
-                        candidates[kw] = candidate
+                offset = 0
+                while offset < 5000:
+                    _jobs[job_id]["progress"] = (
+                        f"Fetching {label} keywords ranking 31–100: "
+                        f"{len(candidates):,} loaded…"
+                    )
+                    result = _invoke_connector("ahrefs_site_explorer.organic_keywords", {
+                        "target": target, "mode": mode, "country": country,
+                        "limit": 1000, "offset": offset,
+                        "order_by": "position", "direction": "asc",
+                        "filters": {"min_position": 31, "max_position": 100,
+                                    "min_volume": min_volume or 0},
+                    })
+                    successful_calls += 1
+                    batch = result.get("records", [])
+                    for row in batch:
+                        kw = (row.get("keyword") or "").strip()
+                        if not kw:
+                            continue
+                        candidate = {
+                            "keyword": kw, "volume": row.get("volume") or 0,
+                            "difficulty": row.get("difficulty"),
+                            # organic_keywords reports CPC in cents already.
+                            "cpc_cents": int(row.get("cpc") or 0),
+                            "position": row.get("position"),
+                            "ranking_url": row.get("url") or "",
+                            "content_scope": scope or "whole_site",
+                        }
+                        existing = candidates.get(kw)
+                        if not existing or (candidate.get("position") or 999) < (existing.get("position") or 999):
+                            candidates[kw] = candidate
+                    if len(batch) < 1000:
+                        break
+                    offset += 1000
             except Exception as exc:
-                warning = f"Breakout scope {label} failed: {exc}"; warnings.append(warning); print(warning)
+                warning = f"Breakout scope {label} failed: {exc}"
+                warnings.append(warning)
+                print(warning)
         if successful_calls == 0:
             raise RuntimeError("All Ahrefs Breakout calls failed. " + (warnings[0] if warnings else "Check connector approval."))
         if not candidates:
