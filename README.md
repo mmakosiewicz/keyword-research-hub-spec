@@ -14,6 +14,7 @@ Six interlocking workflows that share one filter pipeline and one keyword bank:
 4. **[Ranking Targets](./workflows/04-ranking-targets.md)** — tagged keyword watchlist with live rank tracking
 5. **[Tier + Cluster Lookup](./workflows/05-tier-cluster.md)** — semantic enrichment from a precomputed JSON
 6. **[Lists & Sessions](./workflows/06-lists-sessions.md)** — every run is a named session; keywords can be tagged to lists; CSV export
+7. **[Tier + Cluster Generator](./workflows/07-tier-generator.md)** — define a core, embed, cluster, tier, score BP, and explore the integrated Topic map
 
 ## What ties them together
 
@@ -29,11 +30,14 @@ Six interlocking workflows that share one filter pipeline and one keyword bank:
 3. [`filter-pipeline.md`](./filter-pipeline.md) — the keep/drop rules every workflow shares
 4. [`api.md`](./api.md) — the HTTP surface
 5. [`workflows/*.md`](./workflows/) — read in order; each builds on the previous
+6. [`reference-app/`](./reference-app/) — sanitized runnable implementation with PostgreSQL, generator, Table/Topic map, and public-host security controls
 
 ## External dependencies
 
 - **Ahrefs API** — Keywords Explorer (`ke_ideas`) and Site Explorer (`organic_keywords`). The app cannot function without it. User provides credentials.
-- **A semantic clustering input file** — `keyword_tiers.json`. See [`workflows/05-tier-cluster.md`](./workflows/05-tier-cluster.md) for the schema. A sample is provided at [`sample-data/keyword_tiers.sample.json`](./sample-data/keyword_tiers.sample.json).
+- **An OpenAI-compatible model endpoint** — used by the in-app tier generator for embeddings, cluster labels, and optional business-potential scoring. Configure endpoint/key through environment variables only.
+
+`keyword_tiers.json` is optional at first launch: the Hub runs with empty tier/cluster fields. Generate a real file from your own core + keyword bank with [Workflow 7](./workflows/07-tier-generator.md). Do not reuse another site's tier file. A schema sample remains at [`sample-data/keyword_tiers.sample.json`](./sample-data/keyword_tiers.sample.json).
 
 ## Secrets, IDs, and credentials
 
@@ -56,5 +60,10 @@ A user can:
 6. Move keywords into named saved lists; later look up which list any keyword belongs to.
 7. CSV-export any session or list.
 8. View a "Master List" merging the latest completed session from each workflow.
+9. Generate tiers/clusters from a user-defined core and explore the same filtered Master List as a table or Topic map.
 
 No part of this requires leaving the app.
+
+## Runnable reference implementation
+
+A sanitized standalone application is available at [`reference-app/`](./reference-app/). It contains no private keyword bank, credentials, domains, project IDs, member data, or generated tier file. Read its [`SECURITY.md`](./reference-app/SECURITY.md) and [`PRIVACY.md`](./reference-app/PRIVACY.md) before exposing it outside localhost.
