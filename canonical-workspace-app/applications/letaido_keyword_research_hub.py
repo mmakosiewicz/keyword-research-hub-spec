@@ -781,42 +781,118 @@ def run_breakout():
 
 def _run_breakout_job(job_id, settings):
     try:
-        filters=settings.get("filters",{});country=settings.get("target_country","us");target_site=settings.get("target_site","")
-        if not target_site: raise RuntimeError("Configure a target site first.")
-        own_brand=target_site.split(".")[0].lower();min_volume=filters.get("min_volume",100);exclude_terms=[t.lower() for t in filters.get("exclude_terms",[])]
-        blog_target=f"https://{target_site.strip('/')}/blog/";warnings=[]
-        _jobs[job_id]["progress"]="Fetching blog keywords ranking 31–100…"
-        result=_invoke_connector("ahrefs_site_explorer.organic_positions_export", {"target":blog_target,"mode":"prefix","country":country,"limit":1000,"offset":0,"filters":{"min_position":31,"max_position":100,"min_volume":min_volume or 0},"include_raw_csv":False})
-        blog_keywords={}
-        for row in result.get("records",[]):
-            kw=(row.get("keyword") or "").strip()
-            if kw: blog_keywords[kw]={"keyword":kw,"volume":row.get("volume") or 0,"difficulty":row.get("difficulty"),"cpc_cents":int(float(row.get("cpc") or 0)*100),"position":row.get("position"),"ranking_url":row.get("url") or ""}
-        if not blog_keywords:
-            sid,total,new_count=_save_session("breakout",filters,{},0,{"breakout_count":0,"cannibalization_count":0,"warnings":[]});_jobs[job_id].update(status="completed",session_id=sid,progress="Done! No blog keywords matched positions 31–100.");return
+        from urllib.parse import urlparse
+        filters = settings.get("filters", {})
+        country = settings.get("target_country", "us")
+        target_site = settings.get("target_site", "")
+        if not target_site:
+            raise RuntimeError("Configure a target site first.")
+        own_brand = target_site.split(".")[0].lower()
+        min_volume = filters.get("min_volume", 100)
+        exclude_terms = [t.lower() for t in filters.get("exclude_terms", [])]
+        scope_mode = settings.get("breakout_scope_mode") or "whole_site"
+        raw_paths = settings.get("breakout_paths") or []
+        content_paths = []
+        for value in raw_paths:
+            path = "/" + str(value).strip().strip("/") + "/"
+            if path != "//" and path not in content_paths:
+                content_paths.append(path)
+        if scope_mode == "paths" and not content_paths:
+            raise RuntimeError("Add at least one content path in Settings, or switch Breakout scope to Whole site.")
 
-        _jobs[job_id]["progress"]=f"Cross-checking {len(blog_keywords)} keywords against the domain…"
-        # Exact keyword lookup returns every target URL/position, so non-blog pages can be identified without raw API filters.
-        domain_rankings,rank_warnings,rank_successes=_rankings_for_keywords(list(blog_keywords),target_site,country,job_id);warnings.extend(rank_warnings)
-        if rank_successes==0 and rank_warnings: raise RuntimeError("All domain cross-check calls failed. "+rank_warnings[0])
-        metrics,metric_warnings,_=_overview_terms(list(blog_keywords),country,job_id);warnings.extend(metric_warnings)
-        final_keywords={};excluded=0
-        for kw,data in blog_keywords.items():
-            if exclude_terms and any(t in kw.lower() for t in exclude_terms):excluded+=1;continue
-            metric=metrics.get(kw,{});intents={str(v).lower() for v in(metric.get("intents") or [])};category=metric.get("category")
-            filter_row={"volume":data.get("volume") or 0,"difficulty":data.get("difficulty"),"attrs":{"branded":"branded" in intents,"local":"local" in intents},"categories":{"category":[category] if category else []}}
-            if not _apply_keyword_filters(kw,filter_row,filters,own_brand):excluded+=1;continue
-            non_blog=None
-            for pos in (domain_rankings.get(kw,{}).get("urls") or []):
-                url=pos.get("url") or "";position=pos.get("position")
-                if "/blog/" not in url and position is not None and (not non_blog or position<non_blog["position"]):non_blog={"url":url,"position":position}
-            final_keywords[kw]={"keyword":kw,"volume":data["volume"],"traffic_potential":metric.get("traffic_potential") or 0,"difficulty":data["difficulty"],"cpc_cents":int(float(metric.get("cpc") or 0)*100) if metric.get("cpc") is not None else data.get("cpc_cents") or 0,"position":data["position"],"ranking_url":data["ranking_url"],"parent_topic":metric.get("parent_keyword"),"trend_3m":metric.get("growth_3mo"),"trend_6m":metric.get("growth_6mo"),"volume_history":_history_from_connector(metric),"extra":{"status":"cannibalization" if non_blog else "breakout","other_url":non_blog["url"] if non_blog else None,"other_position":non_blog["position"] if non_blog else None},"sources":set()}
-        breakout_count=sum(1 for d in final_keywords.values() if d["extra"]["status"]=="breakout");cannibal_count=len(final_keywords)-breakout_count
-        summary={"breakout_count":breakout_count,"cannibalization_count":cannibal_count,"warnings":warnings,"warning_count":len(warnings)}
-        sid,total,new_count=_save_session("breakout",filters,final_keywords,excluded,summary)
-        msg=f"Done! {breakout_count} breakout + {cannibal_count} cannibalization ({excluded} filtered)"+(f" · {len(warnings)} warning(s)" if warnings else "")
-        _jobs[job_id].update(status="completed",session_id=sid,progress=msg,warnings=warnings)
+        def path_of(url):
+            try: return urlparse(url).path or "/"
+            except Exception: return "/"
+        def in_content_scope(url):
+            path = path_of(url)
+            return any(path.startswith(prefix) for prefix in content_paths)
+
+        warnings, candidates, successful_calls = [], {}, 0
+        scopes = content_paths if scope_mode == "paths" else [None]
+        for idx, scope in enumerate(scopes):
+            label = scope or "whole site"
+            _jobs[job_id]["progress"] = f"Fetching {label} keywords ranking 31–100…"
+            try:
+                target = (f"https://{target_site.strip('/')}{scope}" if scope else target_site)
+                mode = "prefix" if scope else "subdomains"
+                result = _invoke_connector("ahrefs_site_explorer.organic_positions_export", {
+                    "target": target, "mode": mode, "country": country, "limit": 1000, "offset": 0,
+                    "filters": {"min_position": 31, "max_position": 100, "min_volume": min_volume or 0},
+                    "include_raw_csv": False,
+                })
+                successful_calls += 1
+                for row in result.get("records", []):
+                    kw = (row.get("keyword") or "").strip()
+                    if not kw: continue
+                    existing = candidates.get(kw)
+                    candidate = {"keyword": kw, "volume": row.get("volume") or 0,
+                        "difficulty": row.get("difficulty"), "cpc_cents": int(float(row.get("cpc") or 0)*100),
+                        "position": row.get("position"), "ranking_url": row.get("url") or "",
+                        "content_scope": scope or "whole_site"}
+                    if not existing or (candidate.get("position") or 999) < (existing.get("position") or 999):
+                        candidates[kw] = candidate
+            except Exception as exc:
+                warning = f"Breakout scope {label} failed: {exc}"; warnings.append(warning); print(warning)
+        if successful_calls == 0:
+            raise RuntimeError("All Ahrefs Breakout calls failed. " + (warnings[0] if warnings else "Check connector approval."))
+        if not candidates:
+            summary = {"breakout_count": 0, "cannibalization_count": 0, "scope_mode": scope_mode,
+                       "content_paths": content_paths, "warnings": warnings, "warning_count": len(warnings)}
+            sid, total, new_count = _save_session("breakout", filters, {}, 0, summary)
+            _jobs[job_id].update(status="completed", session_id=sid,
+                progress="Done! No keywords matched positions 31–100.", warnings=warnings)
+            return
+
+        _jobs[job_id]["progress"] = f"Cross-checking {len(candidates)} keywords against the domain…"
+        domain_rankings, rank_warnings, rank_successes = _rankings_for_keywords(list(candidates), target_site, country, job_id)
+        warnings.extend(rank_warnings)
+        if rank_successes == 0 and rank_warnings:
+            raise RuntimeError("All domain cross-check calls failed. " + rank_warnings[0])
+        metrics, metric_warnings, _ = _overview_terms(list(candidates), country, job_id)
+        warnings.extend(metric_warnings)
+
+        final_keywords, excluded = {}, 0
+        for kw, data in candidates.items():
+            if exclude_terms and any(t in kw.lower() for t in exclude_terms): excluded += 1; continue
+            metric = metrics.get(kw, {})
+            intents = {str(v).lower() for v in (metric.get("intents") or [])}
+            category = metric.get("category")
+            filter_row = {"volume": data.get("volume") or 0, "difficulty": data.get("difficulty"),
+                "attrs": {"branded": "branded" in intents, "local": "local" in intents},
+                "categories": {"category": [category] if category else []}}
+            if not _apply_keyword_filters(kw, filter_row, filters, own_brand): excluded += 1; continue
+
+            other = None
+            for pos in (domain_rankings.get(kw, {}).get("urls") or []):
+                url, position = pos.get("url") or "", pos.get("position")
+                if not url or url == data["ranking_url"] or position is None: continue
+                outside_scope = not in_content_scope(url) if scope_mode == "paths" else True
+                better_page = position < (data.get("position") or 999)
+                if outside_scope and better_page and (not other or position < other["position"]):
+                    other = {"url": url, "position": position}
+            status = "cannibalization" if other else ("breakout" if scope_mode == "paths" else "opportunity")
+            final_keywords[kw] = {"keyword": kw, "volume": data["volume"],
+                "traffic_potential": metric.get("traffic_potential") or 0, "difficulty": data["difficulty"],
+                "cpc_cents": int(float(metric.get("cpc") or 0)*100) if metric.get("cpc") is not None else data.get("cpc_cents") or 0,
+                "position": data["position"], "ranking_url": data["ranking_url"],
+                "parent_topic": metric.get("parent_keyword"), "trend_3m": metric.get("growth_3mo"),
+                "trend_6m": metric.get("growth_6mo"), "volume_history": _history_from_connector(metric),
+                "extra": {"status": status, "scope_mode": scope_mode, "content_scope": data.get("content_scope"),
+                          "other_url": other["url"] if other else None, "other_position": other["position"] if other else None},
+                "sources": set()}
+        primary_count = sum(1 for d in final_keywords.values() if d["extra"]["status"] in ("breakout", "opportunity"))
+        cannibal_count = len(final_keywords) - primary_count
+        summary = {"breakout_count": primary_count, "cannibalization_count": cannibal_count,
+                   "scope_mode": scope_mode, "content_paths": content_paths,
+                   "warnings": warnings, "warning_count": len(warnings)}
+        sid, total, new_count = _save_session("breakout", filters, final_keywords, excluded, summary)
+        primary_label = "breakout" if scope_mode == "paths" else "opportunity"
+        msg = f"Done! {primary_count} {primary_label} + {cannibal_count} cannibalization ({excluded} filtered)"
+        if warnings: msg += f" · {len(warnings)} warning(s)"
+        _jobs[job_id].update(status="completed", session_id=sid, progress=msg, warnings=warnings)
     except Exception as exc:
-        _jobs[job_id].update(status="failed",progress=f"Ahrefs Breakout failed: {exc}",error=traceback.format_exc());print(f"Breakout job failed: {traceback.format_exc()}")
+        _jobs[job_id].update(status="failed", progress=f"Ahrefs Breakout failed: {exc}", error=traceback.format_exc())
+        print(f"Breakout job failed: {traceback.format_exc()}")
 
 
 # ─── Master List (cross-tab merge) ───────────────────────────
@@ -941,9 +1017,9 @@ def master_results():
             item["tracker_tags"] = extra.get("tags") or []
         elif tab == "breakout":
             status = extra.get("status")
-            if status in ("breakout", "cannibalization"):
+            if status in ("breakout", "opportunity", "cannibalization"):
                 item["action_signals"].append({"type": status, "source": label,
-                    "label": "Breakout" if status == "breakout" else "Cannibalization"})
+                    "label": "Breakout" if status == "breakout" else "Opportunity" if status == "opportunity" else "Cannibalization"})
             item["other_url"] = extra.get("other_url")
             item["other_position"] = extra.get("other_position")
         elif tab == "content_gap":
