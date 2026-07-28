@@ -13,6 +13,7 @@ kr_tier_runs. Output: /home/console/http/default/data/keyword_tiers.json
 (read by both the Hub master list and the Keyword Universe app).
 """
 
+import hashlib
 import json
 import os
 import pwd
@@ -394,9 +395,11 @@ def run_pipeline(run_id):
 
     run = get_run(run_id)
     cfg = run["config"]
+    mode = cfg.get("mode", "full")
     _update(run_id, status="running", step="core")
 
-    # 1. core
+    # 1. Core set. The normalized hash makes incremental updates safe: if the
+    # center moved, saved centroids are no longer valid and a full rebuild is required.
     src = cfg.get("core_source", "lists")
     if src == "rank_tracker":
         core_kws = _core_from_rank_tracker(cfg["project_id"])
@@ -404,115 +407,143 @@ def run_pipeline(run_id):
         core_kws = [k.strip() for k in cfg.get("core_keywords", []) if k.strip()]
     else:
         core_kws = _core_from_lists(cfg.get("core_lists", ["pitch", "backlog", "maybe"]))
-    core_kws = list(dict.fromkeys(core_kws))
+    core_kws = sorted(set(core_kws), key=str.lower)
     if len(core_kws) < 4:
         raise RuntimeError(
             f"Core set too small ({len(core_kws)} keywords). Need at least 4 — "
             "add keywords to your lists, pick a Rank Tracker project, or paste more."
         )
+    core_hash = hashlib.sha256("\n".join(k.lower() for k in core_kws).encode()).hexdigest()
     _update(run_id, step="candidates", progress={"core_count": len(core_kws)})
 
-    # 2. candidates = keyword bank + core
+    # 2. Current keyword bank.
     cand_rows = _candidates_from_bank(include_nope=cfg.get("include_nope", False))
-    universe = {}
-    for r in cand_rows:
-        universe[r["keyword"].lower()] = r
+    universe = {r["keyword"].lower(): r for r in cand_rows}
     for kw in core_kws:
         universe.setdefault(kw.lower(), {"keyword": kw, "list": "", "volume": "", "kd": "",
                                          "position": "", "url": "", "traffic_potential": "", "tabs": ""})
-    keys = list(universe.keys())
     core_set = {k.lower() for k in core_kws}
-    _update(run_id, step="embed", progress={"core_count": len(core_kws), "universe": len(keys)})
 
-    # 3. embed
-    vecs = _embed([universe[k]["keyword"] for k in keys], run_id)
-    idx = {k: i for i, k in enumerate(keys)}
-    core_idx = [idx[k] for k in keys if k in core_set]
-    core_vecs = vecs[core_idx]
-    core_texts = [universe[keys[i]]["keyword"] for i in core_idx]
+    old_data, old_by_kw = {}, {}
+    if mode == "quick":
+        if not os.path.exists(TIERS_OUT):
+            raise RuntimeError("Run a Full rebuild before using Quick update.")
+        with open(TIERS_OUT) as f:
+            old_data = json.load(f)
+        metadata = old_data.get("metadata") or {}
+        if metadata.get("core_hash") != core_hash:
+            raise RuntimeError("The core keyword set changed. Run a Full rebuild.")
+        if not metadata.get("centroids"):
+            raise RuntimeError("The saved model predates incremental updates. Run one Full rebuild.")
+        old_by_kw = {r.get("keyword", "").strip().lower(): r for r in old_data.get("results", [])}
+        keys = [key for key in universe if key not in old_by_kw or old_by_kw[key].get("tier") is None
+                or (cfg.get("bp") and old_by_kw[key].get("bp") is None)]
+        if not keys:
+            _update(run_id, status="completed", step="done",
+                    summary={"mode": "quick", "keywords": 0, "message": "Everything is already enriched."},
+                    finished_at=datetime.now())
+            return
+        centroids = np.asarray(metadata["centroids"], dtype=np.float64)
+        k = len(centroids)
+        clusters = old_data.get("clusters", {})
+        labels = {int(cid): info.get("label", f"Cluster {cid}") for cid, info in clusters.items()}
+        thresholds = old_data.get("thresholds") or {}
+        t1, t2, t3 = float(thresholds.get("t1", .45)), float(thresholds.get("t2", .60)), float(thresholds.get("t3", .70))
+        _update(run_id, step="embed", progress={"core_count": len(core_kws), "universe": len(keys)})
+        vecs = _embed([universe[key]["keyword"] for key in keys], run_id)
+    else:
+        keys = list(universe.keys())
+        _update(run_id, step="embed", progress={"core_count": len(core_kws), "universe": len(keys)})
+        vecs = _embed([universe[key]["keyword"] for key in keys], run_id)
+        idx = {key: i for i, key in enumerate(keys)}
+        core_idx = [idx[key] for key in keys if key in core_set]
+        core_vecs = vecs[core_idx]
+        core_texts = [universe[keys[i]]["keyword"] for i in core_idx]
+        _update(run_id, step="cluster")
+        centroids, labels, k = _cluster_and_label(core_vecs, core_texts, int(cfg.get("k") or 0))
 
-    # 4. cluster + label
-    _update(run_id, step="cluster")
-    centroids, labels, k = _cluster_and_label(core_vecs, core_texts, int(cfg.get("k") or 0))
+        # Full rebuild chooses fresh thresholds.
+        all_sims = vecs @ centroids.T
+        all_nearest = np.argmax(all_sims, axis=1)
+        all_dist = 1 - all_sims[np.arange(len(keys)), all_nearest]
+        if cfg.get("threshold_mode") == "percentile":
+            t1, t2, t3 = np.percentile(all_dist, [75, 90, 95])
+        else:
+            t1, t2, t3 = cfg.get("thresholds") or DEFAULT_THRESHOLDS
 
-    # 5. tiers
+    # 3. Apply saved/new semantic model to rows in scope.
     _update(run_id, step="tier")
     sims = vecs @ centroids.T
     nearest = np.argmax(sims, axis=1)
     dist = 1 - sims[np.arange(len(keys)), nearest]
     avg_dist = 1 - sims.mean(axis=1)
-
-    if cfg.get("threshold_mode") == "percentile":
-        t1, t2, t3 = np.percentile(dist, [75, 90, 95])
-    else:
-        t1, t2, t3 = cfg.get("thresholds") or DEFAULT_THRESHOLDS
     tiers = np.select([dist < t1, dist < t2, dist < t3], [1, 2, 3], default=4)
 
-    # 6. bp
     bp = {}
     if cfg.get("bp") and cfg.get("product"):
         _update(run_id, step="bp")
         bp_model = cfg.get("bp_model") or DEFAULT_BP_MODEL
         if bp_model not in BP_MODELS:
             bp_model = DEFAULT_BP_MODEL
-        bp = _score_bp([universe[k]["keyword"] for k in keys], cfg["product"], run_id, bp_model)
+        bp = _score_bp([universe[key]["keyword"] for key in keys], cfg["product"], run_id, bp_model)
 
-    # 7. write
+    # 4. Merge quick rows into the existing enrichment; full replaces all rows.
     _update(run_id, step="write")
-    results = []
+    updated = {}
     for i, key in enumerate(keys):
         row = universe[key]
         c = int(nearest[i])
-        results.append({
-            "keyword": row["keyword"],
-            "list": row.get("list", ""),
-            "volume": row.get("volume", ""),
-            "kd": row.get("kd", ""),
-            "position": row.get("position", ""),
-            "url": row.get("url", ""),
-            "traffic_potential": row.get("traffic_potential", ""),
-            "tabs": row.get("tabs", ""),
-            "nearest_cluster": c,
-            "nearest_cluster_name": labels.get(c, f"Cluster {c}"),
-            "distance": round(float(dist[i]), 4),
-            "avg_distance": round(float(avg_dist[i]), 4),
-            "is_in_core": key in core_set,
-            "tier": int(tiers[i]),
-            "bp": bp.get(row["keyword"]),
-        })
-    cluster_sizes = {c: int((nearest == c).sum()) for c in range(k)}
+        previous = old_by_kw.get(key, {})
+        updated[key] = {
+            "keyword": row["keyword"], "list": row.get("list", ""),
+            "volume": row.get("volume", ""), "kd": row.get("kd", ""),
+            "position": row.get("position", ""), "url": row.get("url", ""),
+            "traffic_potential": row.get("traffic_potential", ""), "tabs": row.get("tabs", ""),
+            "nearest_cluster": c, "nearest_cluster_name": labels.get(c, f"Cluster {c}"),
+            "distance": round(float(dist[i]), 4), "avg_distance": round(float(avg_dist[i]), 4),
+            "is_in_core": key in core_set, "tier": int(tiers[i]),
+            "bp": bp.get(row["keyword"], previous.get("bp")),
+        }
+    if mode == "quick":
+        merged = {key: value for key, value in old_by_kw.items() if key in universe}
+        merged.update(updated)
+        results = list(merged.values())
+    else:
+        results = list(updated.values())
+
+    cluster_sizes = {c: sum(1 for row in results if int(row.get("nearest_cluster", -1)) == c) for c in range(k)}
+    previous_clusters = old_data.get("clusters", {}) if mode == "quick" else {}
     out = {
         "results": results,
         "clusters": {
             str(c): {"label": labels.get(c, f"Cluster {c}"), "size": cluster_sizes[c],
-                     "representative": getattr(_cluster_and_label, "last_reps", {}).get(c, [])}
+                     "representative": previous_clusters.get(str(c), {}).get("representative",
+                        getattr(_cluster_and_label, "last_reps", {}).get(c, []))}
             for c in range(k)
         },
         "tier_labels": TIER_LABELS,
-        "thresholds": {
-            "mode": cfg.get("threshold_mode", "fixed"),
-            "t1": float(t1), "t2": float(t2), "t3": float(t3),
-        },
+        "thresholds": {"mode": cfg.get("threshold_mode", "fixed"),
+                       "t1": float(t1), "t2": float(t2), "t3": float(t3)},
+        "metadata": {"core_hash": core_hash, "core_count": len(core_kws),
+                     "centroids": np.asarray(centroids).tolist(),
+                     "embedding_model": EMBED_MODEL,
+                     "updated_at": datetime.now().isoformat()},
     }
     tmp = TIERS_OUT + ".tmp"
     with open(tmp, "w") as f:
         json.dump(out, f, ensure_ascii=False)
     os.replace(tmp, TIERS_OUT)
-    try:
-        os.chmod(TIERS_OUT, 0o664)
-    except Exception:
-        pass
+    try: os.chmod(TIERS_OUT, 0o664)
+    except Exception: pass
 
     from collections import Counter
     tc = Counter(r["tier"] for r in results)
-    summary = {
-        "keywords": len(results),
-        "core": len(core_kws),
-        "clusters": [{"id": c, "name": labels.get(c, ""), "size": cluster_sizes[c]} for c in range(k)],
-        "tier_counts": {str(t): tc.get(t, 0) for t in (1, 2, 3, 4)},
-        "thresholds": out["thresholds"],
-        "bp_scored": sum(1 for v in bp.values() if v is not None),
-    }
+    summary = {"mode": mode, "keywords": len(keys), "total_keywords": len(results),
+               "core": len(core_kws),
+               "clusters": [{"id": c, "name": labels.get(c, ""), "size": cluster_sizes[c]} for c in range(k)],
+               "tier_counts": {str(t): tc.get(t, 0) for t in (1, 2, 3, 4)},
+               "thresholds": out["thresholds"],
+               "bp_scored": sum(1 for v in bp.values() if v is not None)}
     _update(run_id, status="completed", step="done", summary=summary,
             finished_at=datetime.now())
 
