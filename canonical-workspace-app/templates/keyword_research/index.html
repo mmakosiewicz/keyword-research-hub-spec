@@ -871,7 +871,7 @@
             <div class="text-sm font-medium text-blue-400">✏️ Content to Update</div>
             <div class="text-xs text-muted-foreground mt-0.5">Ranks 3–10 — refresh to maintain/improve</div>
           </div>
-          <div class="text-3xl font-bold text-blue-400" x-text="results.filter(r => { const e = r.extra ? (typeof r.extra === 'string' ? JSON.parse(r.extra) : r.extra) : {}; return e.category === 'update'; }).length"></div>
+          <div class="text-3xl font-bold text-blue-400" x-text="results.filter(r => targetWorkCategory(r) === 'update').length"></div>
         </div>
       </div>
       <div class="bg-card rounded-lg border border-border p-4 cursor-pointer hover:border-primary/50 transition-colors"
@@ -880,9 +880,9 @@
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium text-orange-400">🔄 Content to Rewrite</div>
-            <div class="text-xs text-muted-foreground mt-0.5">Ranks #1–2, 11+, or not ranking</div>
+            <div class="text-xs text-muted-foreground mt-0.5">Ranks #11+ or not ranking</div>
           </div>
-          <div class="text-3xl font-bold text-orange-400" x-text="results.filter(r => { const e = r.extra ? (typeof r.extra === 'string' ? JSON.parse(r.extra) : r.extra) : {}; return e.category === 'rewrite'; }).length"></div>
+          <div class="text-3xl font-bold text-orange-400" x-text="results.filter(r => targetWorkCategory(r) === 'rewrite').length"></div>
         </div>
       </div>
     </div>
@@ -922,7 +922,7 @@
               <tr class="border-b border-border/50 hover:bg-accent/30">
                 <td class="px-4 py-2.5">
                   <span class="w-2 h-2 rounded-full inline-block"
-                        :class="getTargetExtra(r).category === 'update' ? 'bg-blue-500' : 'bg-orange-500'"></span>
+                        :class="targetWorkCategory(r) === 'update' ? 'bg-blue-500' : targetWorkCategory(r) === 'rewrite' ? 'bg-orange-500' : 'bg-slate-300'"></span>
                 </td>
                 <td class="px-4 py-2.5">
                   <span x-text="r.keyword"></span>
@@ -2383,10 +2383,7 @@ function keywordResearch() {
         });
       }
       if (this.activeTab === 'targets' && this.targetsCategoryFilter !== 'all') {
-        filtered = filtered.filter(r => {
-          const extra = r.extra ? (typeof r.extra === 'string' ? JSON.parse(r.extra) : r.extra) : {};
-          return extra.category === this.targetsCategoryFilter;
-        });
+        filtered = filtered.filter(r => this.targetWorkCategory(r) === this.targetsCategoryFilter);
       }
       this.displayResults = filtered;
     },
@@ -2497,6 +2494,13 @@ function keywordResearch() {
     getTargetExtra(r) {
       if (!r.extra) return {};
       return typeof r.extra === 'string' ? JSON.parse(r.extra) : r.extra;
+    },
+
+    targetWorkCategory(r) {
+      const position = r.position == null ? null : Number(r.position);
+      if (position !== null && position >= 3 && position <= 10) return 'update';
+      if (position === null || position >= 11) return 'rewrite';
+      return null; // Positions 1–2 are already top-performing.
     },
 
     getTargetComp(r, idx) {
