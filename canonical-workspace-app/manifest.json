@@ -7,6 +7,11 @@
     "tables": ["kr_settings", "kr_seeds", "kr_targets", "kr_sessions", "kr_results", "kr_keyword_lists", "kr_tier_runs"]
   },
   "connectors": [
+    {"connector_id": "ahrefs_keywords_explorer.ideas_by_terms_export", "secret_name": "ahrefs_oauth", "surface": "console", "approval_hint": "Approve all reads from this Ahrefs secret to cover the app's research workflows."},
+    {"connector_id": "ahrefs_keywords_explorer.keywords_overview_by_terms_export", "secret_name": "ahrefs_oauth", "surface": "console"},
+    {"connector_id": "ahrefs_keywords_explorer.keywords_overview_by_page_or_domain", "secret_name": "ahrefs_oauth", "surface": "console"},
+    {"connector_id": "ahrefs_site_explorer.organic_keywords", "secret_name": "ahrefs_oauth", "surface": "console"},
+    {"connector_id": "ahrefs_site_explorer.organic_positions_export", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_rank_tracker.list_projects", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_rank_tracker.overview_keywords_export", "secret_name": "ahrefs_oauth", "surface": "console"}
   ],
