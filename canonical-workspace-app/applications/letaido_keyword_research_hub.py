@@ -1491,12 +1491,43 @@ def tiers_status():
     last_session_epoch = cur.fetchone()[0]
     conn.close()
     file_status = _kr_tiers.tier_file_status()
+    classified = {}
+    tier_model = {}
+    if file_status.get("exists"):
+        try:
+            with open(_kr_tiers.TIERS_OUT) as f:
+                tier_model = json.load(f)
+            classified = {r.get("keyword", "").strip().lower(): r for r in tier_model.get("results", [])}
+        except Exception:
+            classified = {}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        WITH latest AS (
+          SELECT DISTINCT ON (tab) id
+          FROM kr_sessions
+          WHERE status='completed'
+          ORDER BY tab, started_at DESC
+        )
+        SELECT DISTINCT lower(r.keyword)
+        FROM kr_results r
+        JOIN latest l ON l.id=r.session_id
+        LEFT JOIN kr_keyword_lists kl ON lower(kl.keyword)=lower(r.keyword) AND kl.list_name='nope'
+        WHERE kl.id IS NULL
+    """)
+    bank_keywords = {r[0] for r in cur.fetchall()}
+    conn.close()
+    missing_tier = sum(1 for kw in bank_keywords if not classified.get(kw) or classified[kw].get("tier") is None)
+    missing_bp = sum(1 for kw in bank_keywords if not classified.get(kw) or classified[kw].get("bp") is None)
+    metadata = tier_model.get("metadata") or {}
+    quick_available = bool(metadata.get("core_hash") and metadata.get("centroids"))
     stale = bool(
         file_status.get("exists")
         and last_session_epoch
         and file_status.get("mtime_epoch")
         and float(last_session_epoch) > file_status["mtime_epoch"]
     )
+    settings = _load_settings()
     return jsonify({
         "file": file_status,
         "latest_run": _kr_tiers.latest_run(),
@@ -1504,8 +1535,14 @@ def tiers_status():
         "bank_count": bank_count,
         "core_available": sum(counts.values()),
         "stale": stale,
+        "missing_tier": missing_tier,
+        "missing_bp": missing_bp,
+        "needs_enrichment": bool(missing_tier or missing_bp),
+        "quick_available": quick_available,
         "bp_models": [{"id": k, "label": v} for k, v in _kr_tiers.BP_MODELS.items()],
         "default_bp_model": _kr_tiers.DEFAULT_BP_MODEL,
+        "enrichment_product": settings.get("enrichment_product") or "",
+        "enrichment_bp_model": settings.get("enrichment_bp_model") or _kr_tiers.DEFAULT_BP_MODEL,
     })
 
 
@@ -1534,6 +1571,7 @@ def tiers_run():
         "bp_model": cfg.get("bp_model") or _kr_tiers.DEFAULT_BP_MODEL,
         "product": (cfg.get("product") or "").strip(),
         "include_nope": bool(cfg.get("include_nope")),
+        "mode": cfg.get("mode") if cfg.get("mode") in {"quick", "full"} else "full",
     }
     if core_source == "rank_tracker" and not config["project_id"]:
         return jsonify({"error": "Pick a Rank Tracker project first."}), 422
@@ -1541,6 +1579,14 @@ def tiers_run():
         return jsonify({"error": "Paste at least 4 core keywords."}), 422
     if config["bp"] and not config["product"]:
         return jsonify({"error": "BP scoring needs a one-sentence product description."}), 422
+    if config["product"]:
+        conn = get_db()
+        cur = conn.cursor()
+        for key, value in (("enrichment_product", config["product"]), ("enrichment_bp_model", config["bp_model"])):
+            cur.execute("INSERT INTO kr_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
+                        "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()",
+                        (key, json.dumps(value)))
+        conn.commit(); conn.close()
     run_id = _kr_tiers.launch_run(config)
     return jsonify({"run_id": run_id})
 
