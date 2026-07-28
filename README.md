@@ -1,6 +1,8 @@
-# Keyword Research Hub — Spec
+# Keyword Research Hub
 
-A logic and data-shape spec for the **Keyword Research Hub**, a single workspace for SEO keyword research. Any agentic AI (Cursor, Claude Code, Replit, etc.) can use this to recreate the app.
+> **Installing in a Letaido workspace? Do not recreate this app from the prose spec.** Install the exact, complete implementation in [`canonical-workspace-app/`](./canonical-workspace-app/) and follow [`AGENTS.md`](./AGENTS.md). It contains the professional UI, all five workflows, Manage tiers, onboarding, and the integrated Master List Table / Topic map.
+
+The Markdown documents below explain behavior and extension points. They are secondary to the canonical implementation during installation.
 
 **This spec is intentionally not prescriptive about stack.** Pick whatever web framework, database, and frontend you want — as long as the workflows, filter logic, and data shapes match what's described here, the recreation is faithful.
 
