@@ -145,8 +145,9 @@
         <div class="mt-6"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Competitor domains</label><textarea x-model="wizardCompetitorsText" rows="4" class="w-full mt-1 bg-white border border-slate-300 rounded-lg p-3 text-sm" placeholder="competitor-one.com&#10;competitor-two.com"></textarea></div>
         <div class="grid md:grid-cols-2 gap-4 mt-4">
           <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker project ID</label><input x-model="settings.rank_tracker_project_id" class="input w-full mt-1" placeholder="Optional"></div>
-          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="input w-full mt-1" placeholder="Optional, comma-separated"></div>
+          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="input w-full mt-1" placeholder="Optional — empty means all tracked keywords"></div>
         </div>
+        <div class="mt-5 border-t border-slate-200 pt-5"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Breakout scope</label><div class="flex gap-2 mt-2"><button @click="settings.breakout_scope_mode='paths'" class="px-3 py-2 rounded-lg border text-sm font-semibold" :class="settings.breakout_scope_mode==='paths'?'border-orange-400 bg-orange-50':'border-slate-200'">Content paths</button><button @click="settings.breakout_scope_mode='whole_site'" class="px-3 py-2 rounded-lg border text-sm font-semibold" :class="settings.breakout_scope_mode==='whole_site'?'border-orange-400 bg-orange-50':'border-slate-200'">Whole site</button></div><textarea x-show="settings.breakout_scope_mode==='paths'" x-model="breakoutPathsText" rows="3" class="w-full mt-3 bg-white border border-slate-300 rounded-lg p-3 text-sm" placeholder="/blog/&#10;/resources/&#10;/learn/"></textarea><p class="text-xs text-slate-500 mt-2" x-text="settings.breakout_scope_mode==='paths'?'Analyze these folders and compare against pages outside them.':'Analyze all pages ranking 31–100 and check for another better-ranking URL.'"></p></div>
       </section>
 
       <!-- Step 3 -->
@@ -305,6 +306,16 @@
              @change="settings.filters.exclude_terms = excludeTermsText.split(',').map(s => s.trim()).filter(Boolean)"
              class="w-full bg-muted border border-border rounded px-3 py-1.5 text-sm"
              placeholder="e.g. services, agency, company...">
+    </div>
+
+    <!-- Research source settings -->
+    <div class="mt-4 border-t border-border pt-4">
+      <h4 class="text-sm font-medium mb-3">Research sources</h4>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div><label class="text-xs text-muted-foreground block mb-1">Rank Tracker project ID</label><input x-model="settings.rank_tracker_project_id" class="w-full bg-muted border border-border rounded px-3 py-1.5 text-sm" placeholder="Optional"></div>
+        <div><label class="text-xs text-muted-foreground block mb-1">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="w-full bg-muted border border-border rounded px-3 py-1.5 text-sm" placeholder="Optional — empty means all keywords"></div>
+      </div>
+      <div class="mt-4"><label class="text-xs text-muted-foreground block mb-2">Breakout scope</label><div class="flex gap-2"><button @click="settings.breakout_scope_mode='paths'" class="px-3 py-1.5 rounded-lg border text-xs font-semibold" :class="settings.breakout_scope_mode==='paths'?'border-orange-400 bg-orange-50 text-orange-700':'border-border'">Content paths</button><button @click="settings.breakout_scope_mode='whole_site'" class="px-3 py-1.5 rounded-lg border text-xs font-semibold" :class="settings.breakout_scope_mode==='whole_site'?'border-orange-400 bg-orange-50 text-orange-700':'border-border'">Whole site</button></div><textarea x-show="settings.breakout_scope_mode==='paths'" x-model="breakoutPathsText" rows="3" class="w-full mt-3 bg-muted border border-border rounded-lg p-3 text-sm" placeholder="/blog/&#10;/resources/&#10;/learn/"></textarea></div>
     </div>
 
     <!-- Category Filter -->
@@ -689,8 +700,8 @@
     </div>
     <div class="bg-card rounded-xl border border-border p-5 mb-6 shadow-sm">
       <p class="text-sm text-muted-foreground">
-        Finds keywords where <strong x-text="settings.target_site + '/blog/'" class="text-foreground"></strong> ranks 31–100,
-        then checks if a non-blog page on the domain already ranks for it.
+        <span x-show="settings.breakout_scope_mode === 'paths'">Finds keywords where pages under <strong class="text-foreground" x-text="(settings.breakout_paths || []).join(', ') || 'your configured content paths'"></strong> rank 31–100, then checks whether a page outside those paths ranks better.</span>
+        <span x-show="settings.breakout_scope_mode === 'whole_site'">Finds pages anywhere on <strong class="text-foreground" x-text="settings.target_site"></strong> ranking 31–100, then checks whether another URL on the domain ranks better for the same keyword.</span>
       </p>
       <div class="flex gap-4 mt-2 text-xs">
         <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-green-500"></span> <strong>Breakout</strong> — no other page ranks, create a dedicated page</span>
@@ -737,6 +748,7 @@
           <select x-model="breakoutFilter" @change="filterResults()" class="bg-muted border border-border rounded px-2 py-0.5 text-xs">
             <option value="all">All</option>
             <option value="breakout">Breakout only</option>
+            <option value="opportunity">Opportunity only</option>
             <option value="cannibalization">Cannibalization only</option>
           </select>
           <label class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -755,8 +767,8 @@
               <th class="px-4 py-2.5 sortable" :class="sortClass('keyword')" @click="toggleSort('keyword')">Keyword</th>
               <th class="px-4 py-2.5 sortable text-right" :class="sortClass('volume')" @click="toggleSort('volume')">Volume</th>
               <th class="px-4 py-2.5 sortable text-right" :class="sortClass('difficulty')" @click="toggleSort('difficulty')">KD</th>
-              <th class="px-4 py-2.5 sortable text-right" :class="sortClass('position')" @click="toggleSort('position')">Blog Pos</th>
-              <th class="px-4 py-2.5">Blog URL</th>
+              <th class="px-4 py-2.5 sortable text-right" :class="sortClass('position')" @click="toggleSort('position')">Content Pos</th>
+              <th class="px-4 py-2.5">Content URL</th>
               <th class="px-4 py-2.5">Other Page</th>
               <th class="px-4 py-2.5 text-center">Trend</th>
               <th class="px-4 py-2.5 sortable text-right" :class="sortClass('trend_3m')" @click="toggleSort('trend_3m')">3mo %</th>
@@ -767,7 +779,7 @@
               <tr class="border-b border-border/50 hover:bg-accent/30">
                 <td class="px-4 py-2.5">
                   <span class="w-2 h-2 rounded-full inline-block"
-                        :class="getBreakoutExtra(r).status === 'breakout' ? 'bg-green-500' : 'bg-yellow-500'"
+                        :class="['breakout','opportunity'].includes(getBreakoutExtra(r).status) ? 'bg-green-500' : 'bg-yellow-500'"
                         :title="getBreakoutExtra(r).status"></span>
                 </td>
                 <td class="px-4 py-2.5">
@@ -802,7 +814,7 @@
          class="bg-card rounded-xl border border-border p-12 text-center text-muted-foreground"><div class="max-w-md mx-auto">
       <div class="text-4xl mb-3">🚀</div>
       <p class="text-lg font-semibold text-foreground mb-2">No breakout runs yet</p>
-      <p class="text-sm mb-1">Breakout finds keywords where your blog already ranks 31–100 — almost-there content that a dedicated page could push onto page 1.</p>
+      <p class="text-sm mb-1" x-text="settings.breakout_scope_mode === 'paths' ? 'Breakout finds almost-ranking keywords under your configured content paths.' : 'Breakout finds almost-ranking pages across the whole site and checks whether another URL ranks better.'"></p>
       <p class="text-sm">Needs nothing but your target site (currently <strong class="text-foreground" x-text="settings.target_site"></strong>) — hit <strong class="text-foreground">▶ Find Breakout Opportunities</strong> above.</p></div>
     </div>
   </div>
@@ -815,11 +827,11 @@
     </div>
     <div class="bg-card rounded-xl border border-border p-5 mb-6 shadow-sm">
       <p class="text-sm text-muted-foreground">
-        Pulls tracked keywords from <strong class="text-foreground">Ahrefs Rank Tracker</strong> (project #<span x-text="targetsConfig.project_id"></span>)
-        filtered by author/topic tags. Shows current position, URL, and competitor rankings.
+        Pulls tracked keywords from <strong class="text-foreground">Ahrefs Rank Tracker</strong> (project #<span x-text="targetsConfig.project_id"></span>).
+        Tags are optional: select tags to narrow the pull, or leave them empty to load every tracked keyword.
       </p>
       <div class="mt-3">
-        <label class="text-xs text-muted-foreground block mb-1.5">Filter by tags:</label>
+        <label class="text-xs text-muted-foreground block mb-1.5">Filter by tags <span class="text-slate-400">(optional)</span>:</label>
         <div class="flex flex-wrap gap-1.5">
           <template x-for="tag in targetsConfig.default_tags" :key="tag">
             <label class="flex items-center gap-1.5 text-xs px-2 py-1 rounded border cursor-pointer"
@@ -835,7 +847,7 @@
     <!-- Run -->
     <div class="flex items-center gap-3 mb-4">
       <button @click="runTargets()"
-              :disabled="isRunning || selectedTargetTags.length === 0"
+              :disabled="isRunning || !targetsConfig.project_id"
               class="px-5 py-2.5 bg-primary text-primary-foreground rounded-lg font-semibold text-sm shadow-sm hover:opacity-90 disabled:opacity-50">
         <span x-show="!isRunning">▶ Pull Rank Tracker Data</span>
         <span x-show="isRunning" class="flex items-center gap-2">
@@ -963,7 +975,7 @@
          class="bg-card rounded-xl border border-border p-12 text-center text-muted-foreground"><div class="max-w-md mx-auto">
       <div class="text-4xl mb-3">🎯</div>
       <p class="text-lg font-semibold text-foreground mb-2">No target keyword data yet</p>
-      <p class="text-sm">Select tags and pull data from Ahrefs Rank Tracker.</p></div>
+      <p class="text-sm">Pull every tracked keyword from the configured Ahrefs Rank Tracker project, or optionally select tags to narrow the results.</p></div>
     </div>
   </div>
 
@@ -1611,11 +1623,14 @@ function keywordResearch() {
       setup_completed: false,
       rank_tracker_project_id: '',
       rank_tracker_tags: [],
+      breakout_scope_mode: 'whole_site',
+      breakout_paths: [],
       filters: { min_volume: 100, max_kd: null, exclude_branded: true, exclude_local: true, min_position: 41, allowed_categories: [], exclude_terms: [], drop_uncategorized: false },
       competitors: []
     },
     excludeTermsText: '',
     rankTrackerTagsText: '',
+    breakoutPathsText: '',
     newCompetitor: '',
     gapKwPerCompetitor: 500,
     breakoutFilter: 'all',
@@ -1775,6 +1790,7 @@ function keywordResearch() {
       if (this.setupWizardStep === 2) {
         this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
         this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
+        this.settings.breakout_paths = this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       }
       if (this.setupWizardStep === 3) {
         this.tiersForm.core_source = this.wizardCoreSource === 'csv' ? 'paste' : this.wizardCoreSource;
@@ -1839,6 +1855,7 @@ function keywordResearch() {
       this.wizardRun = null;
       this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
+      this.settings.breakout_paths = this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       this.tiersForm.core_source = this.wizardCoreSource === 'csv' ? 'paste' : this.wizardCoreSource;
       if (this.wizardCoreSource !== 'rank_tracker') this.tiersForm.core_keywords = this.wizardCoreKeywords;
       this.tiersForm.bp = true;
@@ -2371,9 +2388,12 @@ function keywordResearch() {
       if (data.setup_completed) this.settings.setup_completed = true;
       if (data.rank_tracker_project_id) this.settings.rank_tracker_project_id = data.rank_tracker_project_id;
       if (data.rank_tracker_tags) this.settings.rank_tracker_tags = data.rank_tracker_tags;
+      if (data.breakout_scope_mode) this.settings.breakout_scope_mode = data.breakout_scope_mode;
+      if (data.breakout_paths) this.settings.breakout_paths = data.breakout_paths;
       if (data.filters) this.settings.filters = { ...this.settings.filters, ...data.filters };
       this.excludeTermsText = (this.settings.filters.exclude_terms || []).join(', ');
       this.rankTrackerTagsText = (this.settings.rank_tracker_tags || []).join(', ');
+      this.breakoutPathsText = (this.settings.breakout_paths || []).join('\n');
       this.wizardCompetitorsText = (data.competitors || []).join('\n');
       if (data.competitors) this.settings.competitors = data.competitors;
     },
@@ -2388,7 +2408,9 @@ function keywordResearch() {
           competitors: this.settings.competitors,
           setup_completed: this.settings.setup_completed,
           rank_tracker_project_id: this.settings.rank_tracker_project_id,
-          rank_tracker_tags: this.settings.rank_tracker_tags
+          rank_tracker_tags: this.settings.rank_tracker_tags,
+          breakout_scope_mode: this.settings.breakout_scope_mode,
+          breakout_paths: this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean)
         })
       });
       this.settingsSaved = true;
