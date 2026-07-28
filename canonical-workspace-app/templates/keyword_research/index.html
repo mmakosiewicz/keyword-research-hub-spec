@@ -144,7 +144,15 @@
         <p class="text-sm text-slate-500 mt-1">Add these now or later. They improve Content Gap and Ranking Targets but do not block setup.</p>
         <div class="mt-6"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Competitor domains</label><textarea x-model="wizardCompetitorsText" rows="4" class="w-full mt-1 bg-white border border-slate-300 rounded-lg p-3 text-sm" placeholder="competitor-one.com&#10;competitor-two.com"></textarea></div>
         <div class="grid md:grid-cols-2 gap-4 mt-4">
-          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker project ID</label><input x-model="settings.rank_tracker_project_id" class="input w-full mt-1" placeholder="Optional"></div>
+          <div>
+            <label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker project</label>
+            <select x-model="settings.rank_tracker_project_id" @focus="loadTierProjects()" @change="syncWizardRankProject()" class="input w-full mt-1">
+              <option value="">I don’t use Rank Tracker</option>
+              <template x-for="p in tierProjects" :key="p.id"><option :value="p.id" x-text="`${p.name} · ${p.target_url} · ${p.keywords} keywords`"></option></template>
+            </select>
+            <p x-show="tierProjectsLoading" class="text-xs text-slate-500 mt-1">Loading available projects…</p>
+            <p x-show="tierProjectsError" class="text-xs text-red-600 mt-1" x-text="tierProjectsError"></p>
+          </div>
           <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="input w-full mt-1" placeholder="Optional — empty means all tracked keywords"></div>
         </div>
         <div class="mt-5 border-t border-slate-200 pt-5"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Breakout scope</label><div class="flex gap-2 mt-2"><button @click="settings.breakout_scope_mode='paths'" class="px-3 py-2 rounded-lg border text-sm font-semibold" :class="settings.breakout_scope_mode==='paths'?'border-orange-400 bg-orange-50':'border-slate-200'">Content paths</button><button @click="settings.breakout_scope_mode='whole_site'" class="px-3 py-2 rounded-lg border text-sm font-semibold" :class="settings.breakout_scope_mode==='whole_site'?'border-orange-400 bg-orange-50':'border-slate-200'">Whole site</button></div><textarea x-show="settings.breakout_scope_mode==='paths'" x-model="breakoutPathsText" rows="3" class="w-full mt-3 bg-white border border-slate-300 rounded-lg p-3 text-sm" placeholder="/blog/&#10;/resources/&#10;/learn/"></textarea><p class="text-xs text-slate-500 mt-2" x-text="settings.breakout_scope_mode==='paths'?'Analyze these folders and compare against pages outside them.':'Analyze all pages ranking 31–100 and check for another better-ranking URL.'"></p></div>
@@ -156,11 +164,11 @@
         <h2 class="text-xl font-bold mt-2">Define your topical core</h2>
         <p class="text-sm text-slate-500 mt-1">The core is the center used to cluster and tier every keyword. Use at least 4 representative keywords; 30+ is better.</p>
         <div class="grid md:grid-cols-3 gap-3 mt-6">
-          <button @click="wizardCoreSource='rank_tracker'; loadTierProjects()" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='rank_tracker'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Rank Tracker</strong><span class="text-xs text-slate-500 mt-1 block">Use the keywords already tracked in a project.</span></button>
+          <button @click="wizardCoreSource='rank_tracker'; tiersForm.project_id=settings.rank_tracker_project_id" :disabled="!settings.rank_tracker_project_id" class="p-4 rounded-lg border text-left disabled:opacity-40" :class="wizardCoreSource==='rank_tracker'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Rank Tracker</strong><span class="text-xs text-slate-500 mt-1 block" x-text="settings.rank_tracker_project_id ? `Use ${settings.rank_tracker_project_name || 'the project selected in Step 2'}.` : 'Choose a project in Step 2 first.'"></span></button>
           <button @click="wizardCoreSource='csv'" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='csv'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Upload CSV</strong><span class="text-xs text-slate-500 mt-1 block">Read a keyword column from a UTF-8 CSV.</span></button>
           <button @click="wizardCoreSource='paste'" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='paste'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Paste keywords</strong><span class="text-xs text-slate-500 mt-1 block">One keyword per line or comma-separated.</span></button>
         </div>
-        <div x-show="wizardCoreSource==='rank_tracker'" class="mt-5"><select x-model="tiersForm.project_id" class="input w-full"><option value="">Choose a project</option><template x-for="p in tierProjects.filter(p=>p.keywords>0)" :key="p.id"><option :value="p.id" x-text="`${p.name} · ${p.keywords} keywords`"></option></template></select><p x-show="tierProjectsLoading" class="text-xs text-slate-500 mt-2">Loading projects…</p></div>
+        <div x-show="wizardCoreSource==='rank_tracker'" class="mt-5 rounded-lg bg-slate-50 p-4"><div class="text-xs font-bold uppercase text-slate-500">Selected project</div><div class="font-semibold mt-1" x-text="settings.rank_tracker_project_name || 'No project selected'"></div><div class="text-sm text-slate-500" x-text="`${wizardCoreCount()} tracked keywords`"></div></div>
         <div x-show="wizardCoreSource==='csv'" class="mt-5"><label class="block rounded-lg border-2 border-dashed border-slate-300 p-7 text-center cursor-pointer hover:border-orange-300"><strong class="text-sm">Choose a keyword CSV</strong><span class="block text-xs text-slate-500 mt-1">We only read the keyword column in your browser.</span><input type="file" accept=".csv,text/csv" class="hidden" @change="parseWizardCoreCsv($event)"></label><p x-show="wizardCsvName" class="text-xs text-emerald-700 mt-2" x-text="`${wizardCsvName}: ${wizardCoreCount()} keywords found`"></p></div>
         <div x-show="wizardCoreSource==='paste'" class="mt-5"><textarea x-model="wizardCoreKeywords" rows="8" class="w-full bg-white border border-slate-300 rounded-lg p-3 text-sm font-mono" placeholder="keyword research&#10;seo audit&#10;backlink analysis"></textarea></div>
         <div class="mt-4 rounded-lg px-3 py-2 text-sm" :class="wizardCoreCount()>=4?'bg-emerald-50 text-emerald-800':'bg-amber-50 text-amber-800'" x-text="wizardCoreCount()>=4?`${wizardCoreCount()} core keywords ready`:`Add at least 4 core keywords (${wizardCoreCount()} currently)`"></div>
@@ -312,7 +320,7 @@
     <div class="mt-4 border-t border-border pt-4">
       <h4 class="text-sm font-medium mb-3">Research sources</h4>
       <div class="grid md:grid-cols-2 gap-4">
-        <div><label class="text-xs text-muted-foreground block mb-1">Rank Tracker project ID</label><input x-model="settings.rank_tracker_project_id" class="w-full bg-muted border border-border rounded px-3 py-1.5 text-sm" placeholder="Optional"></div>
+        <div><label class="text-xs text-muted-foreground block mb-1">Rank Tracker project</label><div class="h-[38px] px-3 flex items-center rounded border border-border bg-slate-50 text-sm"><span x-text="settings.rank_tracker_project_name || 'Not configured'"></span><button @click="openSetupWizard()" class="ml-auto text-xs font-semibold text-primary">Change in wizard</button></div></div>
         <div><label class="text-xs text-muted-foreground block mb-1">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="w-full bg-muted border border-border rounded px-3 py-1.5 text-sm" placeholder="Optional — empty means all keywords"></div>
       </div>
       <div class="mt-4"><label class="text-xs text-muted-foreground block mb-2">Breakout scope</label><div class="flex gap-2"><button @click="settings.breakout_scope_mode='paths'" class="px-3 py-1.5 rounded-lg border text-xs font-semibold" :class="settings.breakout_scope_mode==='paths'?'border-orange-400 bg-orange-50 text-orange-700':'border-border'">Content paths</button><button @click="settings.breakout_scope_mode='whole_site'" class="px-3 py-1.5 rounded-lg border text-xs font-semibold" :class="settings.breakout_scope_mode==='whole_site'?'border-orange-400 bg-orange-50 text-orange-700':'border-border'">Whole site</button></div><textarea x-show="settings.breakout_scope_mode==='paths'" x-model="breakoutPathsText" rows="3" class="w-full mt-3 bg-muted border border-border rounded-lg p-3 text-sm" placeholder="/blog/&#10;/resources/&#10;/learn/"></textarea></div>
@@ -827,8 +835,8 @@
     </div>
     <div class="bg-card rounded-xl border border-border p-5 mb-6 shadow-sm">
       <p class="text-sm text-muted-foreground">
-        Pulls tracked keywords from <strong class="text-foreground">Ahrefs Rank Tracker</strong> (project #<span x-text="targetsConfig.project_id"></span>).
-        Tags are optional: select tags to narrow the pull, or leave them empty to load every tracked keyword.
+        <span x-show="targetsConfig.project_id">Pulls tracked keywords from <strong class="text-foreground" x-text="targetsConfig.project_name || 'your saved Ahrefs Rank Tracker project'"></strong>. Tags are optional: select tags to narrow the pull, or leave them empty to load every tracked keyword.</span>
+        <span x-show="!targetsConfig.project_id">No Rank Tracker project is configured. <button @click="openSetupWizard()" class="text-primary font-semibold hover:underline">Rerun setup</button> to choose one.</span>
       </p>
       <div class="mt-3">
         <label class="text-xs text-muted-foreground block mb-1.5">Filter by tags <span class="text-slate-400">(optional)</span>:</label>
@@ -1625,6 +1633,7 @@ function keywordResearch() {
       target_country: 'us',
       setup_completed: false,
       rank_tracker_project_id: '',
+      rank_tracker_project_name: '',
       rank_tracker_tags: [],
       breakout_scope_mode: 'whole_site',
       breakout_paths: [],
@@ -1637,7 +1646,7 @@ function keywordResearch() {
     newCompetitor: '',
     gapKwPerCompetitor: 500,
     breakoutFilter: 'all',
-    targetsConfig: { project_id: '', default_tags: [] },
+    targetsConfig: { project_id: '', project_name: '', default_tags: [] },
     selectedTargetTags: [],
     targetsCategoryFilter: 'all',
 
@@ -1762,6 +1771,7 @@ function keywordResearch() {
 
     openSetupWizard() {
       this.setupWizardRerun = true;
+      this.loadTierProjects();
       this.setupWizardStep = 1;
       this.wizardError = '';
       this.wizardCompetitorsText = (this.settings.competitors || []).join('\n');
@@ -1791,6 +1801,7 @@ function keywordResearch() {
     nextWizardStep() {
       if (!this.wizardStepValid()) return;
       if (this.setupWizardStep === 2) {
+        this.syncWizardRankProject();
         this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
         this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
         this.settings.breakout_paths = this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
@@ -1856,6 +1867,7 @@ function keywordResearch() {
       if (this.wizardGenerating) return;
       this.wizardError = '';
       this.wizardRun = null;
+      this.syncWizardRankProject();
       this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
       this.settings.breakout_paths = this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
@@ -1919,6 +1931,11 @@ function keywordResearch() {
       };
       check();
       this.wizardPollTimer = setInterval(check, 1800);
+    },
+
+    syncWizardRankProject() {
+      const project = this.tierProjects.find(p => String(p.id) === String(this.settings.rank_tracker_project_id));
+      this.settings.rank_tracker_project_name = project?.name || '';
     },
 
     async loadTargetsConfig() {
@@ -2004,6 +2021,7 @@ function keywordResearch() {
         const res = await fetch(`${BASE}/api/tiers/projects`);
         const data = await res.json();
         this.tierProjects = data.projects || [];
+        if (this.settings.rank_tracker_project_id) this.syncWizardRankProject();
         if (data.error) this.tierProjectsError = data.error;
       } catch (e) {
         this.tierProjectsError = 'Could not load Rank Tracker projects.';
@@ -2414,6 +2432,7 @@ function keywordResearch() {
       if (data.target_country) this.settings.target_country = data.target_country;
       if (data.setup_completed) this.settings.setup_completed = true;
       if (data.rank_tracker_project_id) this.settings.rank_tracker_project_id = data.rank_tracker_project_id;
+      if (data.rank_tracker_project_name) this.settings.rank_tracker_project_name = data.rank_tracker_project_name;
       if (data.rank_tracker_tags) this.settings.rank_tracker_tags = data.rank_tracker_tags;
       if (data.breakout_scope_mode) this.settings.breakout_scope_mode = data.breakout_scope_mode;
       if (data.breakout_paths) this.settings.breakout_paths = data.breakout_paths;
@@ -2435,6 +2454,7 @@ function keywordResearch() {
           competitors: this.settings.competitors,
           setup_completed: this.settings.setup_completed,
           rank_tracker_project_id: this.settings.rank_tracker_project_id,
+          rank_tracker_project_name: this.settings.rank_tracker_project_name,
           rank_tracker_tags: this.settings.rank_tracker_tags,
           breakout_scope_mode: this.settings.breakout_scope_mode,
           breakout_paths: this.breakoutPathsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean)
