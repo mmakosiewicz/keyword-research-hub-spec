@@ -1,19 +1,16 @@
 # Workflow 5: Tier + Cluster Lookup
 
-**Goal:** Enrich every keyword in every workflow with two pieces of semantic context — its **tier** (priority bucket) and its **nearest cluster** (topic group) — looked up from a precomputed JSON file.
+**Goal:** Enrich every keyword with semantic context: its topical-distance **tier**, nearest topic **cluster**, and optional 0–3 **business potential** score.
 
-## Why this exists
+## Where the data comes from
 
-Tiers and clusters are produced offline by a separate clustering process (embedding the keyword universe, k-means or HDBSCAN clusters, tier-assignment from a heuristic or LLM judge). The Hub doesn't recompute these on the fly — it just reads the result and joins it onto live keyword data.
+The Hub reads stable, precomputed classifications. It does not recompute embeddings during normal page loads.
 
-This makes the app:
-- **Fast** — pure dict lookup, in-memory.
-- **Decoupled** — clustering can be improved without touching the app.
-- **Honest** — tiers are static labels; they don't drift as you re-rank candidates.
+A user can launch the in-app generator described in [Workflow 7](./07-tier-generator.md). The generator defines a core set, embeds keywords, clusters the core, calculates distance tiers, optionally scores BP, and writes the enrichment data. Normal workflow views then perform fast lookups.
 
-## Input file: `keyword_tiers.json`
+The app must still run before generation: unknown keywords return null tier/cluster/BP fields.
 
-A single JSON file with this shape:
+## Input/output shape
 
 ```json
 {
@@ -34,52 +31,58 @@ A single JSON file with this shape:
       "is_in_core": true,
       "tier": 1,
       "bp": 1
-    },
-    ...
+    }
   ],
   "clusters": [
-    { "id": 6, "name": "SEO Strategy and Performance", "size": 142 },
-    ...
+    {"id": 6, "name": "SEO Strategy and Performance", "size": 142}
   ],
   "tier_labels": {
-    "1": "Core priority",
-    "2": "High value",
-    "3": "Long tail",
-    "4": "Speculative"
+    "1": "Core orbit",
+    "2": "Adjacent",
+    "3": "Far orbit",
+    "4": "Outside"
   }
 }
 ```
 
-A real sample is provided at [`sample-data/keyword_tiers.sample.json`](../sample-data/keyword_tiers.sample.json).
+A synthetic schema sample is provided at [`sample-data/keyword_tiers.sample.json`](../sample-data/keyword_tiers.sample.json). It is enough to test parsing/UI, not to classify a real site.
 
-## Loader
+## Lookup
 
-On first use, load the file into an in-memory dict keyed by lowercased keyword:
+Load into a dictionary keyed by normalized lowercase keyword:
 
 ```python
 tier_cache = {}
 for row in data["results"]:
-    tier_cache[row["keyword"].lower()] = {
-        "tier": row["tier"],
-        "tier_label": tier_labels.get(str(row["tier"]), ""),
+    tier_cache[row["keyword"].strip().lower()] = {
+        "tier": row.get("tier"),
+        "tier_label": tier_labels.get(str(row.get("tier")), ""),
+        "cluster_id": row.get("nearest_cluster"),
         "cluster": row.get("nearest_cluster_name", ""),
+        "distance": row.get("distance"),
+        "is_in_core": bool(row.get("is_in_core")),
         "bp": row.get("bp"),
         "list": row.get("list"),
     }
 ```
 
-Hot-reload when the file's mtime changes. Don't ship a process restart for a tier rebuild.
+Hot-reload after a completed generation run (or when the file mtime changes in file-backed implementations). Do not require a process restart.
 
-## Usage in other workflows
+## Usage
 
-Every workflow's result row should optionally include `tier`, `tier_label`, `cluster` fields populated from this lookup. UI can color-code by tier, group by cluster, etc.
+Every workflow result may include `tier`, `tier_label`, `cluster`, `distance`, and `bp`. The Master List provides:
 
-## Future: separate "Universe" view
+- tier/BP/cluster filters;
+- a sortable table;
+- an integrated **Table / Topic map** view toggle;
+- a keyword details panel when a map point is selected.
 
-A standalone visualization (a "galaxy" / 2-D scatter / cluster browser) of the tier/cluster file. Not strictly part of the Hub — but a natural sibling app reading the same file. In the reference implementation, this is split into a separate app (`keyword_universe`).
+The Topic map is part of the Hub, not a separate sibling application. See [Workflow 7](./07-tier-generator.md) for visualization behavior.
 
 ## Edge cases
 
-- Keyword not in tier file → return null for all four fields. Don't error.
-- File missing → app must still run; tier columns are just empty.
-- File corrupt → log loudly, keep the previous cache, don't crash.
+- Keyword absent from generated data → return null enrichment fields; never error.
+- No generation exists → the app runs and shows a clear setup monitor.
+- Generated data is corrupt → log loudly, retain the previous valid cache, and do not crash.
+- Latest research session is newer than the enrichment run → show a staleness notice and a regenerate action.
+- Sample data → clearly label synthetic; never present it as a real classification.
