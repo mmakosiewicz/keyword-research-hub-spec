@@ -1543,6 +1543,7 @@ def tiers_status():
         "default_bp_model": _kr_tiers.DEFAULT_BP_MODEL,
         "enrichment_product": settings.get("enrichment_product") or "",
         "enrichment_bp_model": settings.get("enrichment_bp_model") or _kr_tiers.DEFAULT_BP_MODEL,
+        "enrichment_core_config": settings.get("enrichment_core_config") or {},
     })
 
 
@@ -1582,7 +1583,14 @@ def tiers_run():
     if config["product"]:
         conn = get_db()
         cur = conn.cursor()
-        for key, value in (("enrichment_product", config["product"]), ("enrichment_bp_model", config["bp_model"])):
+        for key, value in (
+            ("enrichment_product", config["product"]),
+            ("enrichment_bp_model", config["bp_model"]),
+            ("enrichment_core_config", {
+                "core_source": config["core_source"], "core_lists": config["core_lists"],
+                "project_id": config["project_id"], "core_keywords": config["core_keywords"],
+            }),
+        ):
             cur.execute("INSERT INTO kr_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
                         "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()",
                         (key, json.dumps(value)))
