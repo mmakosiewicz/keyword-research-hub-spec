@@ -362,6 +362,11 @@ def _cluster_and_label(core_vecs, core_kws, k):
 
 
 def _score_bp(keywords, product, run_id, model=None):
+    """Score BP robustly with reasoning-model-safe output headroom.
+
+    Returns a complete keyword->score mapping. Residual failures are explicit
+    None values, logged by chunk, and surfaced in the run summary.
+    """
     model = model or DEFAULT_BP_MODEL
     scores = {}
     system = (
@@ -372,19 +377,38 @@ def _score_bp(keywords, product, run_id, model=None):
         "2 = the product helps a lot but isn't essential\n"
         "1 = the product is only tangentially relevant\n"
         "0 = no realistic way to pitch the product\n\n"
-        "Reply with ONLY a JSON object mapping each keyword to its integer score."
+        "Reply with ONLY a valid JSON object mapping every exact keyword to its integer score. "
+        "Do not omit keywords and do not add commentary."
     )
-    for i in range(0, len(keywords), 50):
-        chunk = keywords[i:i + 50]
-        try:
-            got = _parse_json(_chat(model, system + "\n\nKeywords:\n" + "\n".join(chunk)))
-            for kw in chunk:
-                v = got.get(kw)
-                scores[kw] = int(v) if v is not None and str(v).isdigit() else None
-        except Exception:
-            for kw in chunk:
-                scores.setdefault(kw, None)
-        _update(run_id, progress={"step": "bp", "done": min(i + 50, len(keywords)), "total": len(keywords)})
+    chunk_size = 25
+    for i in range(0, len(keywords), chunk_size):
+        chunk = keywords[i:i + chunk_size]
+        prompt = system + "\n\nKeywords:\n" + "\n".join(chunk)
+        got = None
+        for attempt in range(3):
+            try:
+                candidate = _parse_json(_chat(model, prompt, max_tokens=8000))
+                if not isinstance(candidate, dict) or not candidate:
+                    raise ValueError("model returned an empty/non-object JSON response")
+                got = candidate
+                break
+            except Exception as exc:
+                print(f"[bp] chunk {i}-{i+len(chunk)} attempt {attempt+1} failed: {exc}", flush=True)
+        got = got or {}
+        normalized = {str(key).strip().lower(): value for key, value in got.items()}
+        missing = []
+        for kw in chunk:
+            value = got.get(kw)
+            if value is None:
+                value = normalized.get(kw.strip().lower())
+            text = str(value).strip() if value is not None else ""
+            score = int(text) if text in {"0", "1", "2", "3"} else None
+            scores[kw] = score
+            if score is None:
+                missing.append(kw)
+        if missing:
+            print(f"[bp] chunk {i}-{i+len(chunk)} left {len(missing)} unscored: {missing[:5]}", flush=True)
+        _update(run_id, progress={"step": "bp", "done": min(i + chunk_size, len(keywords)), "total": len(keywords)})
     return scores
 
 
@@ -543,7 +567,8 @@ def run_pipeline(run_id):
                "clusters": [{"id": c, "name": labels.get(c, ""), "size": cluster_sizes[c]} for c in range(k)],
                "tier_counts": {str(t): tc.get(t, 0) for t in (1, 2, 3, 4)},
                "thresholds": out["thresholds"],
-               "bp_scored": sum(1 for v in bp.values() if v is not None)}
+               "bp_scored": sum(1 for v in bp.values() if v is not None),
+               "bp_failed": sum(1 for v in bp.values() if v is None)}
     _update(run_id, status="completed", step="done", summary=summary,
             finished_at=datetime.now())
 
