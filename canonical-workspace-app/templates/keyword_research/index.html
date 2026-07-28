@@ -1007,11 +1007,20 @@
         </div>
         <p x-show="masterEnrichmentError" class="text-xs text-red-600 mt-2" x-text="masterEnrichmentError"></p>
       </div>
-      <div class="flex items-center gap-2 shrink-0">
-        <button @click="runMasterEnrichment('quick')" :disabled="tierRunActive || !tiersStatus.quick_available"
+      <div x-show="!tierRunActive" class="flex items-center gap-2 shrink-0">
+        <button @click="runMasterEnrichment('quick')" :disabled="!tiersStatus.quick_available"
                 class="kr-toolbar-btn disabled:opacity-40" title="Preserves existing clusters and enriches only missing rows">Quick update</button>
-        <button @click="runMasterEnrichment('full')" :disabled="tierRunActive"
-                class="px-4 h-[38px] rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold disabled:opacity-40">Full rebuild</button>
+        <button @click="runMasterEnrichment('full')"
+                class="px-4 h-[38px] rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold">Full rebuild</button>
+      </div>
+      <div x-show="tierRunActive" x-cloak class="w-[300px] shrink-0">
+        <div class="flex items-center justify-between text-xs font-semibold text-slate-700 mb-1.5">
+          <span x-text="masterEnrichmentStatus()"></span>
+          <span x-text="`${Math.round(masterEnrichmentPercent())}%`"></span>
+        </div>
+        <div class="h-2 rounded-full bg-orange-100 overflow-hidden">
+          <div class="h-full rounded-full bg-orange-500 transition-all duration-500" :style="`width:${masterEnrichmentPercent()}%`"></div>
+        </div>
       </div>
     </div>
 
@@ -1959,6 +1968,22 @@ function keywordResearch() {
       }
     },
 
+    masterEnrichmentStatus() {
+      const labels = {core:'Preparing',candidates:'Collecting keywords',embed:'Embedding',cluster:'Clustering',tier:'Assigning tiers',bp:'Scoring BP',write:'Saving',done:'Complete'};
+      return labels[this.tierRun?.step] || 'Starting';
+    },
+
+    masterEnrichmentPercent() {
+      const order = ['core','candidates','embed','cluster','tier','bp','write','done'];
+      const run = this.tierRun;
+      if (!run) return 2;
+      if (run.status === 'completed') return 100;
+      const idx = Math.max(0, order.indexOf(run.step));
+      let pct = (idx / (order.length - 1)) * 100;
+      if (run.progress?.total) pct += (run.progress.done / run.progress.total) * (100 / (order.length - 1));
+      return Math.min(98, Math.max(3, pct));
+    },
+
     async runMasterEnrichment(mode) {
       await this.loadTiersStatus();
       if (!this.tiersFormValid()) {
@@ -1984,6 +2009,11 @@ function keywordResearch() {
             clearInterval(this.tierPollTimer);
             this.tierRunActive = false;
             localStorage.removeItem('kr_tier_run');
+            if (this.tierRun.status === 'failed') {
+              this.masterEnrichmentError = this.tierRun.error || 'Tier and BP enrichment failed.';
+            } else {
+              this.masterEnrichmentError = '';
+            }
             await this.loadTiersStatus();
             if (this.activeTab === 'master') await this.loadMaster();
           }
