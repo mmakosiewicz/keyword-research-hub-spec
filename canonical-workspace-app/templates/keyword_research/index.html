@@ -170,14 +170,11 @@
       </div>
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Rank Tracker Project ID</label>
-        <input type="text" x-model="settings.rank_tracker_project_id" placeholder="Optional"
-               class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
+        <input type="text" x-model="settings.rank_tracker_project_id" placeholder="Optional" class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
       </div>
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Rank Tracker Tags</label>
-        <input type="text" x-model="rankTrackerTagsText" placeholder="Comma-separated"
-               @change="settings.rank_tracker_tags = rankTrackerTagsText.split(',').map(s => s.trim()).filter(Boolean)"
-               class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
+        <input type="text" x-model="rankTrackerTagsText" placeholder="Comma-separated" @change="settings.rank_tracker_tags = rankTrackerTagsText.split(',').map(s => s.trim()).filter(Boolean)" class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
       </div>
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Min Volume</label>
@@ -891,10 +888,34 @@
       </p>
     </div>
 
-    <!-- Stale tiers nudge -->
-    <div x-show="tiersStatus.stale" class="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 mb-4 text-sm flex items-center justify-between gap-3">
-      <span>⚠️ Your tier/cluster labels are <strong>older than your latest run</strong> — new keywords have no tier yet (last generated <span x-text="tiersStatus.file?.mtime"></span>).</span>
-      <button @click="switchToTiers()" class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md border border-yellow-500/50 hover:bg-yellow-500/20">Regenerate →</button>
+    <!-- Master List enrichment prompt -->
+    <div x-show="tiersStatus.needs_enrichment" x-cloak
+         class="rounded-xl border border-orange-200 bg-orange-50 p-4 mb-5 flex items-center justify-between gap-5">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center font-bold">AI</span>
+          <div>
+            <h3 class="text-sm font-semibold text-slate-900">Complete the new Master List keywords</h3>
+            <p class="text-sm text-slate-600 mt-0.5">
+              <strong x-text="tiersStatus.missing_tier || 0"></strong> need a tier and
+              <strong x-text="tiersStatus.missing_bp || 0"></strong> need a business-potential score.
+            </p>
+          </div>
+        </div>
+        <p x-show="masterEnrichmentError" class="text-xs text-red-600 mt-2" x-text="masterEnrichmentError"></p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button @click="runMasterEnrichment('quick')" :disabled="tierRunActive || !tiersStatus.quick_available"
+                class="kr-toolbar-btn disabled:opacity-40" title="Preserves existing clusters and enriches only missing rows">Quick update</button>
+        <button @click="runMasterEnrichment('full')" :disabled="tierRunActive"
+                class="px-4 h-[38px] rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold disabled:opacity-40">Full rebuild</button>
+      </div>
+    </div>
+
+    <div x-show="!tiersStatus.needs_enrichment && tiersStatus.file?.exists" x-cloak
+         class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 mb-5 flex items-center justify-between text-sm">
+      <span class="text-emerald-800"><strong>Master List is fully enriched.</strong> Every keyword has its current Tier and BP classification.</span>
+      <button @click="runMasterEnrichment('full')" class="text-xs font-semibold text-emerald-800 hover:underline">Rebuild all</button>
     </div>
 
     <!-- List summary cards -->
@@ -1448,6 +1469,7 @@ function keywordResearch() {
     tierRun: null,
     tierRunActive: false,
     tierRunError: '',
+    masterEnrichmentError: '',
     tierPollTimer: null,
     tierSteps: [['core','Collect core keywords'],['candidates','Collect candidate keywords'],['embed','Embed keywords'],['cluster','Cluster core & label topics'],['tier','Compute distances & assign tiers'],['bp','Score business potential'],['write','Write tier file']],
 
@@ -1542,7 +1564,7 @@ function keywordResearch() {
 
     async switchToMaster() {
       this.activeTab = 'master';
-      await this.loadListCounts();
+      await Promise.all([this.loadListCounts(), this.loadTiersStatus()]);
       await this.loadMaster();
     },
 
@@ -1585,6 +1607,8 @@ function keywordResearch() {
       try {
         const res = await fetch(`${BASE}/api/tiers/status`);
         this.tiersStatus = await res.json();
+        if (!this.tiersForm.product && this.tiersStatus.enrichment_product) this.tiersForm.product = this.tiersStatus.enrichment_product;
+        if (this.tiersStatus.enrichment_bp_model) this.tiersForm.bp_model = this.tiersStatus.enrichment_bp_model;
       } catch (e) { this.tiersStatus = {}; }
     },
 
@@ -1617,13 +1641,14 @@ function keywordResearch() {
       this.tierProjectsLoading = false;
     },
 
-    async runTierGeneration() {
+    async runTierGeneration(mode = 'full') {
       this.tierRunError = '';
+      this.masterEnrichmentError = '';
       this.tierRunActive = true;
       try {
         const res = await fetch(`${BASE}/api/tiers/run`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.tiersForm),
+          body: JSON.stringify({ ...this.tiersForm, mode }),
         });
         const data = await res.json();
         if (!res.ok) { this.tierRunError = data.error || 'Failed to start.'; this.tierRunActive = false; return; }
@@ -1634,6 +1659,20 @@ function keywordResearch() {
         this.tierRunError = 'Failed to start: ' + e.message;
         this.tierRunActive = false;
       }
+    },
+
+    async runMasterEnrichment(mode) {
+      await this.loadTiersStatus();
+      if (!this.tiersFormValid()) {
+        this.masterEnrichmentError = 'Review the core and product description before enriching the Master List.';
+        await this.switchToTiers();
+        return;
+      }
+      if (mode === 'quick' && !this.tiersStatus.quick_available) {
+        this.masterEnrichmentError = 'Run one Full rebuild to create the reusable semantic model first.';
+        return;
+      }
+      await this.runTierGeneration(mode);
     },
 
     pollTierRun(runId) {
@@ -1648,6 +1687,7 @@ function keywordResearch() {
             this.tierRunActive = false;
             localStorage.removeItem('kr_tier_run');
             await this.loadTiersStatus();
+            if (this.activeTab === 'master') await this.loadMaster();
           }
         } catch (e) { /* transient */ }
       }, 2500);
@@ -1945,8 +1985,8 @@ function keywordResearch() {
       if (data.filters) this.settings.filters = { ...this.settings.filters, ...data.filters };
       if (data.rank_tracker_project_id) this.settings.rank_tracker_project_id = data.rank_tracker_project_id;
       if (data.rank_tracker_tags) this.settings.rank_tracker_tags = data.rank_tracker_tags;
-      this.excludeTermsText = (this.settings.filters.exclude_terms || []).join(', ');
       this.rankTrackerTagsText = (this.settings.rank_tracker_tags || []).join(', ');
+      this.excludeTermsText = (this.settings.filters.exclude_terms || []).join(', ');
       if (data.competitors) this.settings.competitors = data.competitors;
     },
     
