@@ -1271,6 +1271,7 @@ def targets_config():
     settings = _load_settings()
     return jsonify({
         "project_id": str(settings.get("rank_tracker_project_id") or ""),
+        "project_name": settings.get("rank_tracker_project_name") or "",
         "default_tags": settings.get("rank_tracker_tags") or [],
     })
 
