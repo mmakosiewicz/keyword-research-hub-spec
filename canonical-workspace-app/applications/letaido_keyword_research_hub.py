@@ -81,6 +81,47 @@ def _load_settings():
     return {r["key"]: r["value"] for r in rows}
 
 
+CONNECTOR_PROXY = "http://127.0.0.1:18081/capabilities/invoke"
+
+def _invoke_connector(connector_id, args, timeout=180):
+    response = http_requests.post(f"{CONNECTOR_PROXY}/{connector_id}", json={"caller":"app","secret_name":"ahrefs_oauth","args":args}, timeout=timeout)
+    response.raise_for_status(); payload=response.json()
+    if payload.get("status") != "ok": raise RuntimeError(payload.get("error") or f"{connector_id} failed")
+    return payload.get("result") or {}
+
+def _rankings_for_keywords(keywords, target_site, country, job_id=None):
+    rankings,warnings,successes={},[],0
+    if not target_site or not keywords: return rankings,warnings,successes
+    for i in range(0,len(keywords),100):
+        batch=keywords[i:i+100]
+        if job_id: _jobs[job_id]["progress"]=f"Checking target rankings: {i}/{len(keywords)}…"
+        try:
+            result=_invoke_connector("ahrefs_keywords_explorer.keywords_overview_by_page_or_domain", {"target":target_site,"mode":"domain","country":country,"keywords":batch,"include_related_keywords":False,"limit":max(1,len(batch))})
+            successes+=1
+            for row in result.get("records",[]):
+                keyword=(row.get("keyword") or "").strip()
+                if keyword: rankings[keyword]={"position":row.get("top_position"),"url":row.get("top_url") or "","urls":row.get("urls") or []}
+        except Exception as exc: warnings.append(f"Target ranking batch {i//100+1} failed: {exc}")
+    return rankings,warnings,successes
+
+def _history_from_connector(row):
+    values=row.get("sv_trend") or []
+    return [{"date":str(i),"volume":value} for i,value in enumerate(values[-12:])] or None
+
+def _overview_terms(keywords, country, job_id=None):
+    data,warnings,successes={},[],0
+    for i in range(0,len(keywords),100):
+        batch=keywords[i:i+100]
+        if job_id: _jobs[job_id]["progress"]=f"Enriching keyword metrics: {i}/{len(keywords)}…"
+        try:
+            result=_invoke_connector("ahrefs_keywords_explorer.keywords_overview_by_terms_export", {"keywords":batch,"country":country,"with_position":False,"limit":max(1,len(batch)),"order_by":"volume","direction":"desc","filters":{"terms":batch}})
+            successes+=1
+            for row in result.get("records",[]):
+                keyword=(row.get("keyword") or "").strip()
+                if keyword: data[keyword]=row
+        except Exception as exc: warnings.append(f"Keyword metrics batch {i//100+1} failed: {exc}")
+    return data,warnings,successes
+
 def _apply_keyword_filters(kw, row_or_data, filters, own_brand):
     """Return True if keyword should be KEPT, False if filtered out.
     row_or_data: either a raw KE API row (camelCase) or a dict we built.
@@ -146,29 +187,8 @@ def _apply_keyword_filters(kw, row_or_data, filters, own_brand):
     return True
 
 
-def _check_rankings(client_se, kw_list, target_site, country, min_position, job_id):
-    """Batch-check rankings on target_site. Returns {keyword: {position, url}} for ranked kws,
-    and filters to keep only pos >= min_position or unranked."""
-    from ahrefs_internal import se_filter
-
-    rankings = {}
-    batch_size = 50
-    for i in range(0, len(kw_list), batch_size):
-        batch = kw_list[i : i + batch_size]
-        _jobs[job_id]["progress"] = f"Checking rankings: {i}/{len(kw_list)} keywords..."
-        try:
-            ranked = client_se.site_explorer_organic_keywords(
-                target=target_site,
-                country=country,
-                mode="subdomains",
-                limit=len(batch),
-                filter=se_filter("keyword", "in", batch),
-            )
-            for r in ranked:
-                rankings[r.keyword] = {"position": r.position, "url": r.url}
-        except Exception as e:
-            print(f"Error checking rankings batch {i}: {e}")
-
+def _check_rankings(_unused, kw_list, target_site, country, min_position, job_id):
+    rankings, _warnings, _successes = _rankings_for_keywords(kw_list, target_site, country, job_id)
     return rankings
 
 
@@ -276,11 +296,11 @@ def _save_session(tab, filters, all_keywords, excluded_count, extra_summary=None
                     carried_data["parent_topic"], carried_data["parent_topic_kd"],
                     carried_data["position"], carried_data["ranking_url"],
                     sources if isinstance(sources, str) else "",
-                    json.dumps(carried_data["volume_history"]) if carried_data.get("volume_history") and not isinstance(carried_data["volume_history"], str) else carried_data.get("volume_history"),
+                    json.dumps(carried_data["volume_history"]) if carried_data.get("volume_history") is not None and not isinstance(carried_data["volume_history"], str) else carried_data.get("volume_history"),
                     carried_data["trend_3m"], carried_data["trend_6m"],
-                    json.dumps(carried_data["competitors"]) if carried_data.get("competitors") and not isinstance(carried_data["competitors"], str) else carried_data.get("competitors"),
+                    json.dumps(carried_data["competitors"]) if carried_data.get("competitors") is not None and not isinstance(carried_data["competitors"], str) else carried_data.get("competitors"),
                     False,
-                    json.dumps(carried_data["extra"]) if carried_data.get("extra") and not isinstance(carried_data["extra"], str) else carried_data.get("extra"),
+                    json.dumps(carried_data["extra"]) if carried_data.get("extra") is not None and not isinstance(carried_data["extra"], str) else carried_data.get("extra"),
                 ),
             )
             carried += 1
@@ -576,91 +596,81 @@ def run_discovery():
 
 def _run_discovery_job(job_id, seeds, settings):
     try:
-        from ahrefs_internal import AhrefsClient, AhrefsInternalClient
-
         filters = settings.get("filters", {})
         country = settings.get("target_country", "us")
         target_site = settings.get("target_site", "")
         own_brand = target_site.split(".")[0].lower() if target_site else ""
         min_position = filters.get("min_position", 41)
+        all_keywords, warnings, successful_calls = {}, [], 0
+        modes = [("matching_terms", "matching"), ("related_all", "related"), ("search_suggestions", "suggestions")]
 
-        all_keywords = {}
-        ideas_types = [
-            ("MatchingTermsTermsMatch", "matching"),
-            ("RelatedTerms", "related"),
-            ("SearchSuggestions", "suggestions"),
-        ]
+        for i, seed in enumerate(seeds):
+            for mode, label in modes:
+                _jobs[job_id]["progress"] = f"Seed {i+1}/{len(seeds)}: '{seed}' ({label})"
+                try:
+                    result = _invoke_connector("ahrefs_keywords_explorer.ideas_by_terms_export", {
+                        "seed_keywords": [seed], "country": country, "mode": mode,
+                        "related_top_n": 100, "limit": 100, "order_by": "volume",
+                        "direction": "desc", "with_position": bool(target_site),
+                        "filters": ({"target_url": target_site, "target_url_mode": "subdomains", "target_rank": "all"}
+                                    if target_site else {}),
+                    })
+                    successful_calls += 1
+                    for row in result.get("records", []):
+                        kw = (row.get("keyword") or "").strip()
+                        if not kw:
+                            continue
+                        intents = {str(v).lower() for v in (row.get("intents") or [])}
+                        filter_row = {"volume": row.get("volume") or 0, "difficulty": row.get("difficulty"),
+                                      "attrs": {"branded": "branded" in intents, "local": "local" in intents},
+                                      "categories": {"category": [row["category"]] if row.get("category") else []}}
+                        if not _apply_keyword_filters(kw, filter_row, filters, own_brand):
+                            continue
+                        if kw in all_keywords:
+                            all_keywords[kw]["sources"].add(seed)
+                            continue
+                        pos = row.get("position")
+                        if pos is not None and pos < min_position:
+                            continue
+                        all_keywords[kw] = {
+                            "keyword": kw, "volume": row.get("volume") or 0,
+                            "traffic_potential": row.get("traffic_potential") or 0,
+                            "difficulty": row.get("difficulty"),
+                            "cpc_cents": int(float(row.get("cpc") or 0) * 100),
+                            "parent_topic": row.get("parent_keyword"),
+                            "volume_history": _history_from_connector(row),
+                            "trend_3m": row.get("growth_3mo"), "trend_6m": row.get("growth_6mo"),
+                            "position": pos, "ranking_url": None, "sources": {seed},
+                        }
+                except Exception as exc:
+                    warning = f"{label} ideas failed for '{seed}': {exc}"
+                    warnings.append(warning); print(warning)
 
-        # Phase 1: Fetch keyword ideas from KE
-        with AhrefsInternalClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as client:
-            for i, seed in enumerate(seeds):
-                for ideas_type_val, ideas_label in ideas_types:
-                    _jobs[job_id]["progress"] = f"Seed {i+1}/{len(seeds)}: '{seed}' ({ideas_label})"
-                    try:
-                        result = client.ke_ideas(
-                            seed=["Keywords", [seed]],
-                            country=country,
-                            search_engine="Google",
-                            ideas_type=[ideas_type_val],
-                            offset=0, limit=100,
-                            with_position=False, filters=[],
-                            sort={"by": ["Volume"], "order": ["Desc"]},
-                        )
-                        for row in (result.get("results", []) if isinstance(result, dict) else []):
-                            kw = row.get("keyword", "")
-                            if not kw:
-                                continue
-                            if kw in all_keywords:
-                                all_keywords[kw]["sources"].add(seed)
-                                continue
-                            if not _apply_keyword_filters(kw, row, filters, own_brand):
-                                continue
+        if successful_calls == 0:
+            raise RuntimeError("All Ahrefs Discovery calls failed. " + (warnings[0] if warnings else "Check connector approval."))
 
-                            msv = row.get("monthlySearchVolume") or {}
-                            volume_history = _parse_volume_history(msv)
-                            growth = row.get("growthRate") or {}
-
-                            all_keywords[kw] = {
-                                "keyword": kw,
-                                "volume": row.get("volume") or 0,
-                                "traffic_potential": row.get("trafficPotential") or 0,
-                                "difficulty": row.get("difficulty"),
-                                "cpc_cents": row.get("cpc") or 0,
-                                "parent_topic": row.get("parentTopic"),
-                                "volume_history": volume_history,
-                                "trend_3m": growth.get("months_3"),
-                                "trend_6m": growth.get("months_6"),
-                                "sources": {seed},
-                            }
-                    except Exception as e:
-                        print(f"Error fetching {ideas_label} for '{seed}': {e}")
-
-        # Phase 2: Check rankings
-        _jobs[job_id]["progress"] = f"Checking rankings for {len(all_keywords)} keywords..."
-        with AhrefsClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as se_client:
-            rankings = _check_rankings(se_client, list(all_keywords.keys()), target_site, country, min_position, job_id)
-
-        filtered, excluded = {}, 0
+        # Position can be present on ideas exports. Exact ranking lookup adds URLs and
+        # fills positions where the ideas endpoint did not return one.
+        rankings, rank_warnings, _ = _rankings_for_keywords(list(all_keywords), target_site, country, job_id)
+        warnings.extend(rank_warnings)
+        excluded, filtered = 0, {}
         for kw, data in all_keywords.items():
             rank = rankings.get(kw)
             if rank:
-                data["position"] = rank["position"]
-                data["ranking_url"] = rank["url"]
-                if rank["position"] < min_position:
-                    excluded += 1
-                    continue
-            else:
-                data["position"] = None
-                data["ranking_url"] = None
+                data["position"] = rank.get("position")
+                data["ranking_url"] = rank.get("url")
+            if data.get("position") is not None and data["position"] < min_position:
+                excluded += 1
+                continue
             filtered[kw] = data
 
-        _jobs[job_id]["progress"] = f"Saving {len(filtered)} keywords..."
-        sid, total, new_count = _save_session("discovery", filters, filtered, excluded, {"seeds_used": len(seeds)})
-
-        _jobs[job_id].update(status="completed", session_id=sid,
-            progress=f"Done! {total} keywords ({new_count} new, {excluded} excluded)")
-    except Exception as e:
-        _jobs[job_id].update(status="failed", progress=f"Error: {e}", error=traceback.format_exc())
+        summary = {"seeds_used": len(seeds), "warnings": warnings, "warning_count": len(warnings)}
+        sid, total, new_count = _save_session("discovery", filters, filtered, excluded, summary)
+        message = f"Done! {total} keywords ({new_count} new, {excluded} excluded)"
+        if warnings: message += f" · {len(warnings)} warning(s)"
+        _jobs[job_id].update(status="completed", session_id=sid, progress=message, warnings=warnings)
+    except Exception as exc:
+        _jobs[job_id].update(status="failed", progress=f"Ahrefs Discovery failed: {exc}", error=traceback.format_exc())
         print(f"Discovery job failed: {traceback.format_exc()}")
 
 
@@ -709,195 +719,47 @@ def run_content_gap():
 
 def _run_content_gap_job(job_id, competitors, kw_per_competitor, settings):
     try:
-        from ahrefs_internal import AhrefsClient, AhrefsInternalClient, se_filter
+        filters=settings.get("filters",{}); country=settings.get("target_country","us"); target_site=settings.get("target_site","")
+        own_brand=target_site.split(".")[0].lower() if target_site else ""; min_position=filters.get("min_position",41); min_volume=filters.get("min_volume",100)
+        all_gap_kws,warnings,successful_calls={},[],0
+        for i,comp in enumerate(competitors):
+            _jobs[job_id]["progress"]=f"Fetching keywords from {comp} ({i+1}/{len(competitors)})…"
+            try:
+                result=_invoke_connector("ahrefs_site_explorer.organic_keywords", {"target":comp,"country":country,"mode":"subdomains","limit":min(1000,int(kw_per_competitor)),"order_by":"traffic","direction":"desc","filters":{"min_volume":min_volume or 0}})
+                successful_calls+=1
+                for row in result.get("records",[]):
+                    keyword=(row.get("keyword") or "").strip()
+                    if not keyword: continue
+                    item=all_gap_kws.setdefault(keyword,{"keyword":keyword,"volume":row.get("volume") or 0,"difficulty":row.get("difficulty"),"cpc_cents":row.get("cpc") or 0,"competitors":[]})
+                    item["competitors"].append({"domain":comp,"position":row.get("position"),"url":row.get("url") or "","traffic":row.get("traffic") or 0})
+                    item["volume"]=max(item.get("volume") or 0,row.get("volume") or 0)
+            except Exception as exc:
+                warning=f"Competitor {comp} failed: {exc}";warnings.append(warning);print(warning)
+        if successful_calls==0: raise RuntimeError("All Ahrefs Content Gap calls failed. "+(warnings[0] if warnings else "Check connector approval."))
 
-        filters = settings.get("filters", {})
-        country = settings.get("target_country", "us")
-        target_site = settings.get("target_site", "")
-        own_brand = target_site.split(".")[0].lower() if target_site else ""
-        min_position = filters.get("min_position", 41)
-        min_volume = filters.get("min_volume", 100)
-
-        # Phase 1: Pull top keywords from each competitor
-        all_gap_kws = {}  # keyword -> {volume, difficulty, competitors: [...]}
-
-        with AhrefsClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as client:
-            for i, comp in enumerate(competitors):
-                _jobs[job_id]["progress"] = f"Fetching keywords from {comp} ({i+1}/{len(competitors)})..."
-                try:
-                    kws = client.site_explorer_organic_keywords(
-                        target=comp, country=country, mode="subdomains",
-                        limit=kw_per_competitor,
-                        filter=se_filter("volume", ">=", min_volume or 100),
-                    )
-                    for kw in kws:
-                        keyword = kw.keyword
-                        if keyword not in all_gap_kws:
-                            all_gap_kws[keyword] = {
-                                "keyword": keyword,
-                                "volume": kw.volume,
-                                "difficulty": kw.difficulty,
-                                "cpc_cents": kw.cpc_cents,
-                                "competitors": [],
-                            }
-                        all_gap_kws[keyword]["competitors"].append({
-                            "domain": comp,
-                            "position": kw.position,
-                            "url": kw.url,
-                            "traffic": kw.traffic,
-                        })
-                        # Keep highest volume across sources
-                        if kw.volume and kw.volume > (all_gap_kws[keyword]["volume"] or 0):
-                            all_gap_kws[keyword]["volume"] = kw.volume
-                except Exception as e:
-                    print(f"Error fetching keywords for {comp}: {e}")
-
-            _jobs[job_id]["progress"] = f"Collected {len(all_gap_kws)} unique keywords from {len(competitors)} competitors"
-
-            # Phase 2: Check our rankings and filter out where we already rank well
-            kw_list = list(all_gap_kws.keys())
-            rankings = _check_rankings(client, kw_list, target_site, country, min_position, job_id)
-
-        # Phase 3: Apply text-based filters, then enrich survivors with trends
-        _jobs[job_id]["progress"] = "Applying filters..."
-        pre_enrich = {}
-        excluded = 0
-
-        for kw, data in all_gap_kws.items():
-            # Position filter
-            rank = rankings.get(kw)
-            if rank:
-                if rank["position"] < min_position:
-                    excluded += 1
-                    continue
-                data["position"] = rank["position"]
-                data["ranking_url"] = rank["url"]
-            else:
-                data["position"] = None
-                data["ranking_url"] = None
-
-            # Apply text-based filters (exclude terms, volume, KD)
-            # Pass empty attrs/categories — we don't have KE data yet
-            text_filter_row = {
-                "volume": data["volume"],
-                "difficulty": data["difficulty"],
-                "attrs": {},
-                "categories": {},
-            }
-            # Manually check text filters (skip category/branded/local since we lack attrs)
-            exclude_terms = [t.lower() for t in filters.get("exclude_terms", [])]
-            if data["volume"] and data["volume"] < (min_volume or 0):
-                excluded += 1
-                continue
-            max_kd = filters.get("max_kd")
-            if max_kd is not None and data.get("difficulty") is not None and data["difficulty"] > max_kd:
-                excluded += 1
-                continue
-            if exclude_terms and any(t in kw.lower() for t in exclude_terms):
-                excluded += 1
-                continue
-
-            pre_enrich[kw] = data
-
-        # Phase 4: Enrich survivors with KE data (trends, categories, attrs)
-        # Use small batches of 10 with PhraseMatch for best exact-match rate
-        _jobs[job_id]["progress"] = f"Enriching {len(pre_enrich)} keywords with trends & categories..."
-        ke_data = {}
-        kw_survivors = list(pre_enrich.keys())
-        ke_batch_size = 10
-
-        with AhrefsInternalClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as ke_client:
-            kw_batches = [kw_survivors[i:i+ke_batch_size] for i in range(0, len(kw_survivors), ke_batch_size)]
-            for bi, batch in enumerate(kw_batches):
-                if bi % 10 == 0:
-                    _jobs[job_id]["progress"] = f"Enriching: {bi*ke_batch_size}/{len(kw_survivors)} keywords..."
-                try:
-                    batch_set = set(batch)
-                    result = ke_client.ke_ideas(
-                        seed=["Keywords", batch],
-                        country=country,
-                        search_engine="Google",
-                        ideas_type=["MatchingTermsPhraseMatch"],
-                        offset=0, limit=ke_batch_size * 2,
-                        with_position=False, filters=[],
-                        sort={"by": ["Volume"], "order": ["Desc"]},
-                    )
-                    for row in (result.get("results", []) if isinstance(result, dict) else []):
-                        rk = row.get("keyword", "")
-                        if rk in batch_set:
-                            ke_data[rk] = row
-                except Exception as e:
-                    print(f"Error enriching batch {bi}: {e}")
-
-        _jobs[job_id]["progress"] = f"Enriched {len(ke_data)}/{len(kw_survivors)} keywords. Final filtering..."
-
-        # Phase 5: Apply category/branded/local filters using enrichment, build final
-        final_keywords = {}
-        for kw, data in pre_enrich.items():
-            ke_row = ke_data.get(kw, {})
-            attrs = ke_row.get("attrs") or {}
-            cats = ke_row.get("categories") or {}
-
-            # Branded filter (needs attrs)
-            if filters.get("exclude_branded", True):
-                if attrs.get("branded", False) and own_brand and own_brand not in kw.lower():
-                    excluded += 1
-                    continue
-
-            # Local filter
-            if filters.get("exclude_local", True) and attrs.get("local", False):
-                excluded += 1
-                continue
-
-            # NSFW
-            nsfw = cats.get("nsfw", [])
-            kw_cats = cats.get("category", [])
-            if "Adult" in nsfw or "Nsfw" in nsfw or "Adult" in kw_cats:
-                excluded += 1
-                continue
-
-            # Category filter
-            allowed_categories = filters.get("allowed_categories", [])
-            if allowed_categories:
-                if not kw_cats:
-                    # No category data — either KE didn't have it or it's uncategorized
-                    # For content gap: unenriched keywords are often junk, drop them
-                    if not ke_row or filters.get("drop_uncategorized", False):
-                        excluded += 1
-                        continue
-                else:
-                    matched = any(
-                        c.startswith(a) for c in kw_cats for a in allowed_categories
-                    )
-                    if not matched:
-                        excluded += 1
-                        continue
-
-            # Merge enrichment
-            growth = ke_row.get("growthRate") or {}
-            msv = ke_row.get("monthlySearchVolume") or {}
-            data["traffic_potential"] = ke_row.get("trafficPotential") or 0
-            data["parent_topic"] = ke_row.get("parentTopic")
-            data["trend_3m"] = growth.get("months_3")
-            data["trend_6m"] = growth.get("months_6")
-            data["volume_history"] = _parse_volume_history(msv)
-            if ke_row.get("cpc") is not None:
-                data["cpc_cents"] = ke_row.get("cpc")
-
-            final_keywords[kw] = data
-
-        # Save
-        _jobs[job_id]["progress"] = f"Saving {len(final_keywords)} gap keywords..."
-        sid, total, new_count = _save_session(
-            "content_gap", filters, final_keywords, excluded,
-            {"competitors_analyzed": len(competitors), "competitors": competitors},
-        )
-
-        _jobs[job_id].update(status="completed", session_id=sid,
-            progress=f"Done! {total} gap keywords ({new_count} new, {excluded} filtered out)")
-    except Exception as e:
-        _jobs[job_id].update(status="failed", progress=f"Error: {e}", error=traceback.format_exc())
-        print(f"Content gap job failed: {traceback.format_exc()}")
+        rankings,rank_warnings,_=_rankings_for_keywords(list(all_gap_kws),target_site,country,job_id);warnings.extend(rank_warnings)
+        metrics,metric_warnings,_=_overview_terms(list(all_gap_kws),country,job_id);warnings.extend(metric_warnings)
+        final_keywords={};excluded=0;exclude_terms=[t.lower() for t in filters.get("exclude_terms",[])]
+        for kw,data in all_gap_kws.items():
+            rank=rankings.get(kw)
+            if rank and rank.get("position") is not None and rank["position"]<min_position: excluded+=1;continue
+            data["position"]=rank.get("position") if rank else None;data["ranking_url"]=rank.get("url") if rank else None
+            metric=metrics.get(kw,{})
+            if metric:
+                data["volume"]=metric.get("volume") or data.get("volume") or 0;data["difficulty"]=metric.get("difficulty") if metric.get("difficulty") is not None else data.get("difficulty")
+            intents={str(v).lower() for v in (metric.get("intents") or [])};category=metric.get("category")
+            filter_row={"volume":data.get("volume") or 0,"difficulty":data.get("difficulty"),"attrs":{"branded":"branded" in intents,"local":"local" in intents},"categories":{"category":[category] if category else []}}
+            if exclude_terms and any(t in kw.lower() for t in exclude_terms): excluded+=1;continue
+            if not _apply_keyword_filters(kw,filter_row,filters,own_brand): excluded+=1;continue
+            data.update({"traffic_potential":metric.get("traffic_potential") or 0,"parent_topic":metric.get("parent_keyword"),"trend_3m":metric.get("growth_3mo"),"trend_6m":metric.get("growth_6mo"),"volume_history":_history_from_connector(metric)})
+            if metric.get("cpc") is not None:data["cpc_cents"]=int(float(metric["cpc"])*100)
+            final_keywords[kw]=data
+        summary={"competitors_analyzed":len(competitors),"competitors":competitors,"warnings":warnings,"warning_count":len(warnings)}
+        sid,total,new_count=_save_session("content_gap",filters,final_keywords,excluded,summary)
+        msg=f"Done! {total} gap keywords ({new_count} new, {excluded} filtered out)"+(f" · {len(warnings)} warning(s)" if warnings else "")
+        _jobs[job_id].update(status="completed",session_id=sid,progress=msg,warnings=warnings)
+    except Exception as exc:
+        _jobs[job_id].update(status="failed",progress=f"Ahrefs Content Gap failed: {exc}",error=traceback.format_exc());print(f"Content gap job failed: {traceback.format_exc()}")
 
 
 # ─── Tab 3: Breakout Opportunities ──────────────────────────────────
@@ -918,184 +780,43 @@ def run_breakout():
 
 
 def _run_breakout_job(job_id, settings):
-    """Find blog keywords ranking 31-100, cross-check if the rest of the domain
-    already ranks for them.  Two signals:
-    - non-blog page exists & ranks better → cannibalization / blog is redundant
-    - no non-blog page → opportunity to create a dedicated page
-    """
     try:
-        from ahrefs_internal import AhrefsClient, AhrefsInternalClient, se_filter, se_and
+        filters=settings.get("filters",{});country=settings.get("target_country","us");target_site=settings.get("target_site","")
+        if not target_site: raise RuntimeError("Configure a target site first.")
+        own_brand=target_site.split(".")[0].lower();min_volume=filters.get("min_volume",100);exclude_terms=[t.lower() for t in filters.get("exclude_terms",[])]
+        blog_target=f"https://{target_site.strip('/')}/blog/";warnings=[]
+        _jobs[job_id]["progress"]="Fetching blog keywords ranking 31–100…"
+        result=_invoke_connector("ahrefs_site_explorer.organic_positions_export", {"target":blog_target,"mode":"prefix","country":country,"limit":1000,"offset":0,"filters":{"min_position":31,"max_position":100,"min_volume":min_volume or 0},"include_raw_csv":False})
+        blog_keywords={}
+        for row in result.get("records",[]):
+            kw=(row.get("keyword") or "").strip()
+            if kw: blog_keywords[kw]={"keyword":kw,"volume":row.get("volume") or 0,"difficulty":row.get("difficulty"),"cpc_cents":int(float(row.get("cpc") or 0)*100),"position":row.get("position"),"ranking_url":row.get("url") or ""}
+        if not blog_keywords:
+            sid,total,new_count=_save_session("breakout",filters,{},0,{"breakout_count":0,"cannibalization_count":0,"warnings":[]});_jobs[job_id].update(status="completed",session_id=sid,progress="Done! No blog keywords matched positions 31–100.");return
 
-        filters = settings.get("filters", {})
-        country = settings.get("target_country", "us")
-        target_site = settings.get("target_site", "")
-        own_brand = target_site.split(".")[0].lower() if target_site else ""
-        min_volume = filters.get("min_volume", 100)
-        blog_path = f"{target_site}/blog/"
-        exclude_terms = [t.lower() for t in filters.get("exclude_terms", [])]
-
-        # Phase 1: Pull blog keywords ranking 31-100
-        _jobs[job_id]["progress"] = f"Fetching blog keywords ranking 31-100..."
-
-        blog_keywords = {}  # keyword -> {data}
-        with AhrefsClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as client:
-            offset = 0
-            batch_limit = 500
-            while True:
-                _jobs[job_id]["progress"] = f"Fetching blog keywords: {len(blog_keywords)} loaded..."
-                kws = client.site_explorer_organic_keywords(
-                    target=blog_path, country=country, mode="prefix",
-                    limit=batch_limit, offset=offset,
-                    filter=se_and(
-                        se_filter("position", ">=", 31),
-                        se_filter("position", "<=", 100),
-                        se_filter("volume", ">=", min_volume or 100),
-                    ),
-                )
-                for kw in kws:
-                    blog_keywords[kw.keyword] = {
-                        "keyword": kw.keyword,
-                        "volume": kw.volume,
-                        "difficulty": kw.difficulty,
-                        "cpc_cents": kw.cpc_cents,
-                        "position": kw.position,
-                        "ranking_url": kw.url,
-                    }
-                if len(kws) < batch_limit:
-                    break
-                offset += batch_limit
-                if offset >= 5000:
-                    break
-
-        _jobs[job_id]["progress"] = f"Found {len(blog_keywords)} blog keywords in pos 31-100"
-
-        # Phase 2: Cross-check full domain rankings for these keywords
-        _jobs[job_id]["progress"] = f"Cross-checking domain rankings for {len(blog_keywords)} keywords..."
-        domain_rankings = {}  # keyword -> {position, url} for best non-blog URL
-
-        kw_list = list(blog_keywords.keys())
-        batch_size = 50
-        with AhrefsClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as client:
-            for i in range(0, len(kw_list), batch_size):
-                batch = kw_list[i:i + batch_size]
-                if i % 200 == 0:
-                    _jobs[job_id]["progress"] = f"Cross-checking: {i}/{len(kw_list)} keywords..."
-                try:
-                    ranked = client.site_explorer_organic_keywords(
-                        target=target_site, country=country, mode="subdomains",
-                        limit=len(batch) * 2,
-                        filter=se_filter("keyword", "in", batch),
-                    )
-                    for r in ranked:
-                        is_blog = "/blog/" in r.url
-                        if not is_blog:
-                            # Non-blog page ranks for this keyword
-                            existing = domain_rankings.get(r.keyword)
-                            if not existing or r.position < existing["position"]:
-                                domain_rankings[r.keyword] = {
-                                    "position": r.position,
-                                    "url": r.url,
-                                }
-                except Exception as e:
-                    print(f"Error cross-checking batch {i}: {e}")
-
-        _jobs[job_id]["progress"] = f"{len(domain_rankings)} keywords have non-blog pages. Enriching..."
-
-        # Phase 3: Enrich with KE data (trends)
-        ke_data = {}
-        ke_batch_size = 10
-        with AhrefsInternalClient(base_url="http://127.0.0.1:18081/ahrefs-internal") as ke_client:
-            batches = [kw_list[i:i+ke_batch_size] for i in range(0, len(kw_list), ke_batch_size)]
-            for bi, batch in enumerate(batches):
-                if bi % 10 == 0:
-                    _jobs[job_id]["progress"] = f"Enriching: {bi*ke_batch_size}/{len(kw_list)} keywords..."
-                try:
-                    batch_set = set(batch)
-                    result = ke_client.ke_ideas(
-                        seed=["Keywords", batch],
-                        country=country,
-                        search_engine="Google",
-                        ideas_type=["MatchingTermsPhraseMatch"],
-                        offset=0, limit=ke_batch_size * 2,
-                        with_position=False, filters=[],
-                        sort={"by": ["Volume"], "order": ["Desc"]},
-                    )
-                    for row in (result.get("results", []) if isinstance(result, dict) else []):
-                        rk = row.get("keyword", "")
-                        if rk in batch_set:
-                            ke_data[rk] = row
-                except Exception as e:
-                    print(f"Error enriching batch {bi}: {e}")
-
-        # Phase 4: Apply filters and build results
-        _jobs[job_id]["progress"] = "Applying filters..."
-        final_keywords = {}
-        excluded = 0
-
-        for kw, data in blog_keywords.items():
-            # Text filters
-            if exclude_terms and any(t in kw.lower() for t in exclude_terms):
-                excluded += 1
-                continue
-
-            ke_row = ke_data.get(kw, {})
-            attrs = ke_row.get("attrs") or {}
-            cats = ke_row.get("categories") or {}
-
-            if filters.get("exclude_branded", True) and attrs.get("branded", False):
-                if own_brand and own_brand not in kw.lower():
-                    excluded += 1
-                    continue
-            if filters.get("exclude_local", True) and attrs.get("local", False):
-                excluded += 1
-                continue
-            nsfw = cats.get("nsfw", [])
-            if "Adult" in nsfw or "Nsfw" in nsfw or "Adult" in cats.get("category", []):
-                excluded += 1
-                continue
-
-            # Build result
-            domain_match = domain_rankings.get(kw)
-            growth = ke_row.get("growthRate") or {}
-            msv = ke_row.get("monthlySearchVolume") or {}
-
-            status = "cannibalization" if domain_match else "breakout"
-
-            final_keywords[kw] = {
-                "keyword": kw,
-                "volume": data["volume"],
-                "traffic_potential": ke_row.get("trafficPotential") or 0,
-                "difficulty": data["difficulty"],
-                "cpc_cents": ke_row.get("cpc") or data.get("cpc_cents") or 0,
-                "position": data["position"],  # blog position
-                "ranking_url": data["ranking_url"],  # blog URL
-                "parent_topic": ke_row.get("parentTopic"),
-                "trend_3m": growth.get("months_3"),
-                "trend_6m": growth.get("months_6"),
-                "volume_history": _parse_volume_history(msv),
-                "extra": {
-                    "status": status,
-                    "other_url": domain_match["url"] if domain_match else None,
-                    "other_position": domain_match["position"] if domain_match else None,
-                },
-                "sources": set(),
-            }
-
-        # Save
-        breakout_count = sum(1 for d in final_keywords.values()
-                            if (d.get("extra") or {}).get("status") == "breakout")
-        cannibal_count = len(final_keywords) - breakout_count
-        _jobs[job_id]["progress"] = f"Saving {len(final_keywords)} results..."
-        sid, total, new_count = _save_session(
-            "breakout", filters, final_keywords, excluded,
-            {"breakout_count": breakout_count, "cannibalization_count": cannibal_count},
-        )
-
-        _jobs[job_id].update(status="completed", session_id=sid,
-            progress=f"Done! {breakout_count} breakout + {cannibal_count} cannibalization ({excluded} filtered)")
-    except Exception as e:
-        _jobs[job_id].update(status="failed", progress=f"Error: {e}", error=traceback.format_exc())
-        print(f"Breakout job failed: {traceback.format_exc()}")
+        _jobs[job_id]["progress"]=f"Cross-checking {len(blog_keywords)} keywords against the domain…"
+        # Exact keyword lookup returns every target URL/position, so non-blog pages can be identified without raw API filters.
+        domain_rankings,rank_warnings,rank_successes=_rankings_for_keywords(list(blog_keywords),target_site,country,job_id);warnings.extend(rank_warnings)
+        if rank_successes==0 and rank_warnings: raise RuntimeError("All domain cross-check calls failed. "+rank_warnings[0])
+        metrics,metric_warnings,_=_overview_terms(list(blog_keywords),country,job_id);warnings.extend(metric_warnings)
+        final_keywords={};excluded=0
+        for kw,data in blog_keywords.items():
+            if exclude_terms and any(t in kw.lower() for t in exclude_terms):excluded+=1;continue
+            metric=metrics.get(kw,{});intents={str(v).lower() for v in(metric.get("intents") or [])};category=metric.get("category")
+            filter_row={"volume":data.get("volume") or 0,"difficulty":data.get("difficulty"),"attrs":{"branded":"branded" in intents,"local":"local" in intents},"categories":{"category":[category] if category else []}}
+            if not _apply_keyword_filters(kw,filter_row,filters,own_brand):excluded+=1;continue
+            non_blog=None
+            for pos in (domain_rankings.get(kw,{}).get("urls") or []):
+                url=pos.get("url") or "";position=pos.get("position")
+                if "/blog/" not in url and position is not None and (not non_blog or position<non_blog["position"]):non_blog={"url":url,"position":position}
+            final_keywords[kw]={"keyword":kw,"volume":data["volume"],"traffic_potential":metric.get("traffic_potential") or 0,"difficulty":data["difficulty"],"cpc_cents":int(float(metric.get("cpc") or 0)*100) if metric.get("cpc") is not None else data.get("cpc_cents") or 0,"position":data["position"],"ranking_url":data["ranking_url"],"parent_topic":metric.get("parent_keyword"),"trend_3m":metric.get("growth_3mo"),"trend_6m":metric.get("growth_6mo"),"volume_history":_history_from_connector(metric),"extra":{"status":"cannibalization" if non_blog else "breakout","other_url":non_blog["url"] if non_blog else None,"other_position":non_blog["position"] if non_blog else None},"sources":set()}
+        breakout_count=sum(1 for d in final_keywords.values() if d["extra"]["status"]=="breakout");cannibal_count=len(final_keywords)-breakout_count
+        summary={"breakout_count":breakout_count,"cannibalization_count":cannibal_count,"warnings":warnings,"warning_count":len(warnings)}
+        sid,total,new_count=_save_session("breakout",filters,final_keywords,excluded,summary)
+        msg=f"Done! {breakout_count} breakout + {cannibal_count} cannibalization ({excluded} filtered)"+(f" · {len(warnings)} warning(s)" if warnings else "")
+        _jobs[job_id].update(status="completed",session_id=sid,progress=msg,warnings=warnings)
+    except Exception as exc:
+        _jobs[job_id].update(status="failed",progress=f"Ahrefs Breakout failed: {exc}",error=traceback.format_exc());print(f"Breakout job failed: {traceback.format_exc()}")
 
 
 # ─── Master List (cross-tab merge) ───────────────────────────
