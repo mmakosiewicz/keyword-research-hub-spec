@@ -112,6 +112,86 @@
 
 {% block content %}
 <div class="kr-app" x-data="keywordResearch()" x-init="init()">
+
+<!-- First-run setup wizard -->
+<div x-show="setupWizardOpen" x-cloak class="fixed inset-0 z-[100] bg-slate-100 overflow-y-auto">
+  <div class="max-w-4xl mx-auto px-6 py-10">
+    <div class="flex items-center gap-3 mb-8">
+      <div class="kr-brand-mark">KR</div>
+      <div><h1 class="text-xl font-bold text-slate-900">Set up Keyword Research Hub</h1><p class="text-sm text-slate-500">Four short steps, then the app is ready to work.</p></div>
+    </div>
+    <div class="flex items-center gap-2 mb-6">
+      <template x-for="n in [1,2,3,4]" :key="n"><div class="h-1.5 flex-1 rounded-full" :class="n <= setupWizardStep ? 'bg-orange-500' : 'bg-slate-200'"></div></template>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      <!-- Step 1 -->
+      <section x-show="setupWizardStep === 1" class="p-7">
+        <div class="text-xs font-bold uppercase tracking-wide text-orange-600">Step 1 of 4</div>
+        <h2 class="text-xl font-bold mt-2">Your site and product</h2>
+        <p class="text-sm text-slate-500 mt-1">These are required. The product description gives BP scoring enough context to judge whether a keyword can naturally lead to your product.</p>
+        <div class="grid md:grid-cols-2 gap-4 mt-6">
+          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Target site</label><input x-model="settings.target_site" class="input w-full mt-1" placeholder="example.com"></div>
+          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Country</label><select x-model="settings.target_country" class="input w-full mt-1"><option value="us">United States</option><option value="gb">United Kingdom</option><option value="au">Australia</option><option value="ca">Canada</option><option value="de">Germany</option></select></div>
+        </div>
+        <div class="mt-4"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Product description</label><textarea x-model="tiersForm.product" rows="4" maxlength="2000" class="w-full mt-1 bg-white border border-slate-300 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-orange-200" placeholder="What does the product do, who is it for, and which problems does it solve?"></textarea></div>
+      </section>
+
+      <!-- Step 2 -->
+      <section x-show="setupWizardStep === 2" class="p-7">
+        <div class="text-xs font-bold uppercase tracking-wide text-orange-600">Step 2 of 4 · optional</div>
+        <h2 class="text-xl font-bold mt-2">Research sources</h2>
+        <p class="text-sm text-slate-500 mt-1">Add these now or later. They improve Content Gap and Ranking Targets but do not block setup.</p>
+        <div class="mt-6"><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Competitor domains</label><textarea x-model="wizardCompetitorsText" rows="4" class="w-full mt-1 bg-white border border-slate-300 rounded-lg p-3 text-sm" placeholder="competitor-one.com&#10;competitor-two.com"></textarea></div>
+        <div class="grid md:grid-cols-2 gap-4 mt-4">
+          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker project ID</label><input x-model="settings.rank_tracker_project_id" class="input w-full mt-1" placeholder="Optional"></div>
+          <div><label class="text-xs font-bold uppercase tracking-wide text-slate-500">Rank Tracker tags</label><input x-model="rankTrackerTagsText" class="input w-full mt-1" placeholder="Optional, comma-separated"></div>
+        </div>
+      </section>
+
+      <!-- Step 3 -->
+      <section x-show="setupWizardStep === 3" class="p-7">
+        <div class="text-xs font-bold uppercase tracking-wide text-orange-600">Step 3 of 4</div>
+        <h2 class="text-xl font-bold mt-2">Define your topical core</h2>
+        <p class="text-sm text-slate-500 mt-1">The core is the center used to cluster and tier every keyword. Use at least 4 representative keywords; 30+ is better.</p>
+        <div class="grid md:grid-cols-3 gap-3 mt-6">
+          <button @click="wizardCoreSource='rank_tracker'; loadTierProjects()" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='rank_tracker'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Rank Tracker</strong><span class="text-xs text-slate-500 mt-1 block">Use the keywords already tracked in a project.</span></button>
+          <button @click="wizardCoreSource='csv'" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='csv'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Upload CSV</strong><span class="text-xs text-slate-500 mt-1 block">Read a keyword column from a UTF-8 CSV.</span></button>
+          <button @click="wizardCoreSource='paste'" class="p-4 rounded-lg border text-left" :class="wizardCoreSource==='paste'?'border-orange-400 bg-orange-50':'border-slate-200'"><strong class="block text-sm">Paste keywords</strong><span class="text-xs text-slate-500 mt-1 block">One keyword per line or comma-separated.</span></button>
+        </div>
+        <div x-show="wizardCoreSource==='rank_tracker'" class="mt-5"><select x-model="tiersForm.project_id" class="input w-full"><option value="">Choose a project</option><template x-for="p in tierProjects.filter(p=>p.keywords>0)" :key="p.id"><option :value="p.id" x-text="`${p.name} · ${p.keywords} keywords`"></option></template></select><p x-show="tierProjectsLoading" class="text-xs text-slate-500 mt-2">Loading projects…</p></div>
+        <div x-show="wizardCoreSource==='csv'" class="mt-5"><label class="block rounded-lg border-2 border-dashed border-slate-300 p-7 text-center cursor-pointer hover:border-orange-300"><strong class="text-sm">Choose a keyword CSV</strong><span class="block text-xs text-slate-500 mt-1">We only read the keyword column in your browser.</span><input type="file" accept=".csv,text/csv" class="hidden" @change="parseWizardCoreCsv($event)"></label><p x-show="wizardCsvName" class="text-xs text-emerald-700 mt-2" x-text="`${wizardCsvName}: ${wizardCoreCount()} keywords found`"></p></div>
+        <div x-show="wizardCoreSource==='paste'" class="mt-5"><textarea x-model="wizardCoreKeywords" rows="8" class="w-full bg-white border border-slate-300 rounded-lg p-3 text-sm font-mono" placeholder="keyword research&#10;seo audit&#10;backlink analysis"></textarea></div>
+        <div class="mt-4 rounded-lg px-3 py-2 text-sm" :class="wizardCoreCount()>=4?'bg-emerald-50 text-emerald-800':'bg-amber-50 text-amber-800'" x-text="wizardCoreCount()>=4?`${wizardCoreCount()} core keywords ready`:`Add at least 4 core keywords (${wizardCoreCount()} currently)`"></div>
+      </section>
+
+      <!-- Step 4 -->
+      <section x-show="setupWizardStep === 4" class="p-7">
+        <div class="text-xs font-bold uppercase tracking-wide text-orange-600">Step 4 of 4</div>
+        <h2 class="text-xl font-bold mt-2">Review before generating</h2>
+        <p class="text-sm text-slate-500 mt-1">Nothing is sent to a model until you approve this screen.</p>
+        <div class="grid md:grid-cols-2 gap-3 mt-6">
+          <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Target</div><div class="font-semibold mt-1" x-text="settings.target_site"></div><div class="text-sm text-slate-500" x-text="settings.target_country.toUpperCase()"></div></div>
+          <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Initial core</div><div class="font-semibold mt-1" x-text="`${wizardCoreCount()} keywords`"></div><div class="text-sm text-slate-500" x-text="wizardCoreSourceLabel()"></div></div>
+          <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">BP judge</div><div class="font-semibold mt-1" x-text="tiersStatus.bp_models?.find(m=>m.id===tiersForm.bp_model)?.label || tiersForm.bp_model"></div><div class="text-sm text-slate-500">Full Tier + BP rebuild</div></div>
+          <div class="rounded-lg bg-slate-50 p-4"><div class="text-xs uppercase font-bold text-slate-500">Estimated model cost</div><div class="font-semibold mt-1" x-text="wizardEstimatedCost()"></div><div class="text-sm text-slate-500">Estimate only; provider prices can change.</div></div>
+        </div>
+        <div class="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">The core keywords and product description will be sent to your configured model provider. The initial run creates reusable centroids so future Master List additions can use Quick update.</div>
+        <p x-show="wizardError" class="text-sm text-red-600 mt-3" x-text="wizardError"></p>
+      </section>
+
+      <footer class="px-7 py-4 border-t border-slate-200 flex items-center justify-between bg-slate-50">
+        <button x-show="setupWizardStep>1" @click="setupWizardStep--" class="kr-toolbar-btn">Back</button><span x-show="setupWizardStep===1"></span>
+        <div class="flex gap-2">
+          <button x-show="setupWizardRerun" @click="setupWizardOpen=false" class="kr-toolbar-btn">Cancel</button>
+          <button x-show="setupWizardStep<4" @click="nextWizardStep()" :disabled="!wizardStepValid()" class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold disabled:opacity-40">Continue</button>
+          <button x-show="setupWizardStep===4" @click="finishSetupWizard()" :disabled="tierRunActive" class="px-5 h-[38px] rounded-lg bg-orange-600 text-white text-sm font-semibold disabled:opacity-40">Approve &amp; generate</button>
+        </div>
+      </footer>
+    </div>
+  </div>
+</div>
+
 <div class="kr-shell">
   <!-- Product header -->
   <header class="kr-product-header mb-7">
@@ -151,7 +231,10 @@
 
   <!-- Settings Panel -->
   <div x-show="showSettings" x-transition class="bg-card rounded-xl border border-border p-5 mb-6 shadow-sm">
-    <h3 class="font-semibold mb-3">Global Settings</h3>
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold">Global Settings</h3>
+      <button @click="openSetupWizard()" class="kr-toolbar-btn">Rerun setup wizard</button>
+    </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Target Site</label>
@@ -167,14 +250,6 @@
           <option value="ca">Canada</option>
           <option value="de">Germany</option>
         </select>
-      </div>
-      <div>
-        <label class="text-xs text-muted-foreground block mb-1">Rank Tracker Project ID</label>
-        <input type="text" x-model="settings.rank_tracker_project_id" placeholder="Optional" class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
-      </div>
-      <div>
-        <label class="text-xs text-muted-foreground block mb-1">Rank Tracker Tags</label>
-        <input type="text" x-model="rankTrackerTagsText" placeholder="Comma-separated" @change="settings.rank_tracker_tags = rankTrackerTagsText.split(',').map(s => s.trim()).filter(Boolean)" class="w-full bg-muted border border-border rounded px-2 py-1 text-sm">
       </div>
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Min Volume</label>
@@ -1437,11 +1512,20 @@ function keywordResearch() {
   return {
     activeTab: 'discovery',
     showSettings: false,
+    setupWizardOpen: false,
+    setupWizardRerun: false,
+    setupWizardStep: 1,
+    wizardCoreSource: 'paste',
+    wizardCoreKeywords: '',
+    wizardCsvName: '',
+    wizardCompetitorsText: '',
+    wizardError: '',
     settingsSaved: false,
     
     settings: {
       target_site: '',
       target_country: 'us',
+      setup_completed: false,
       rank_tracker_project_id: '',
       rank_tracker_tags: [],
       filters: { min_volume: 100, max_kd: null, exclude_branded: true, exclude_local: true, min_position: 41, allowed_categories: [], exclude_terms: [], drop_uncategorized: false },
@@ -1535,6 +1619,16 @@ function keywordResearch() {
     
     async init() {
       await Promise.all([this.loadSettings(), this.loadSeeds(), this.loadTargetsConfig(), this.loadTiersStatus()]);
+      // Existing installations that already have a configured site and a tier model
+      // predate the wizard; mark them complete without interrupting the user.
+      if (!this.settings.setup_completed && this.settings.target_site && this.tiersStatus.file?.exists) {
+        this.settings.setup_completed = true;
+        await this.saveSettings();
+      }
+      if (!this.settings.setup_completed) {
+        this.setupWizardOpen = true;
+        this.setupWizardRerun = false;
+      }
       await this.loadSessions();
       window.addEventListener('resize', () => {
         if (this.masterView === 'map') this.drawMasterMap();
@@ -1554,6 +1648,99 @@ function keywordResearch() {
           } else { localStorage.removeItem('kr_tier_run'); }
         } catch (e) { /* ignore */ }
       }
+    },
+
+    openSetupWizard() {
+      this.setupWizardRerun = true;
+      this.setupWizardStep = 1;
+      this.wizardError = '';
+      this.wizardCompetitorsText = (this.settings.competitors || []).join('\n');
+      this.setupWizardOpen = true;
+      this.showSettings = false;
+    },
+
+    wizardCoreCount() {
+      if (this.wizardCoreSource === 'rank_tracker') {
+        const p = this.tierProjects.find(p => String(p.id) === String(this.tiersForm.project_id));
+        return p?.keywords || 0;
+      }
+      return this.wizardCoreKeywords.split(/[\n,]/).map(s=>s.trim()).filter(Boolean).length;
+    },
+
+    wizardCoreSourceLabel() {
+      return ({rank_tracker:'Ahrefs Rank Tracker',csv:'Uploaded CSV',paste:'Pasted keywords'})[this.wizardCoreSource] || '';
+    },
+
+    wizardStepValid() {
+      if (this.setupWizardStep === 1) return !!this.settings.target_site.trim() && !!this.tiersForm.product.trim();
+      if (this.setupWizardStep === 2) return true;
+      if (this.setupWizardStep === 3) return this.wizardCoreCount() >= 4;
+      return true;
+    },
+
+    nextWizardStep() {
+      if (!this.wizardStepValid()) return;
+      if (this.setupWizardStep === 2) {
+        this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
+        this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
+      }
+      if (this.setupWizardStep === 3) {
+        this.tiersForm.core_source = this.wizardCoreSource === 'csv' ? 'paste' : this.wizardCoreSource;
+        if (this.wizardCoreSource !== 'rank_tracker') this.tiersForm.core_keywords = this.wizardCoreKeywords;
+      }
+      this.setupWizardStep++;
+    },
+
+    async parseWizardCoreCsv(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) { this.wizardError = 'CSV must be under 10 MB.'; return; }
+      const text = await file.text();
+      const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
+      if (!lines.length) return;
+      const headers = lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/^"|"$/g,''));
+      const idx = headers.indexOf('keyword');
+      if (idx < 0) { this.wizardError = 'CSV needs a keyword column.'; return; }
+      const kws = lines.slice(1).map(line => line.split(',')[idx]?.trim().replace(/^"|"$/g,'')).filter(Boolean);
+      this.wizardCoreKeywords = [...new Set(kws)].join('\n');
+      this.wizardCsvName = file.name;
+      this.wizardError = '';
+    },
+
+    wizardEstimatedCost() {
+      const count = Math.max(this.tiersStatus.bank_count || 0, this.wizardCoreCount());
+      const per6500 = ({
+        'anthropic/claude-opus-5':1.25,
+        'anthropic/claude-sonnet-5':0.50,
+        'anthropic/claude-haiku-4.5':0.25,
+        'openai/gpt-5.6-sol':1.50,
+        'openai/gpt-5.6-luna':0.15
+      })[this.tiersForm.bp_model] || 1.25;
+      const estimate = Math.max(0.01, per6500 * count / 6500);
+      return `About $${estimate.toFixed(2)} for ${count.toLocaleString()} keywords`;
+    },
+
+    async finishSetupWizard() {
+      this.wizardError = '';
+      if (!this.wizardStepValid()) return;
+      this.settings.competitors = this.wizardCompetitorsText.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
+      this.settings.rank_tracker_tags = this.rankTrackerTagsText.split(',').map(s=>s.trim()).filter(Boolean);
+      this.tiersForm.core_source = this.wizardCoreSource === 'csv' ? 'paste' : this.wizardCoreSource;
+      if (this.wizardCoreSource !== 'rank_tracker') this.tiersForm.core_keywords = this.wizardCoreKeywords;
+      this.tiersForm.bp = true;
+      const previousComplete = this.settings.setup_completed;
+      this.settings.setup_completed = true;
+      await this.saveSettings();
+      await this.runTierGeneration('full');
+      if (this.tierRunError) {
+        this.settings.setup_completed = previousComplete || false;
+        await this.saveSettings();
+        this.wizardError = this.tierRunError;
+        return;
+      }
+      this.setupWizardOpen = false;
+      this.setupWizardRerun = false;
+      this.activeTab = 'master';
     },
 
     async loadTargetsConfig() {
@@ -1609,6 +1796,11 @@ function keywordResearch() {
         this.tiersStatus = await res.json();
         if (!this.tiersForm.product && this.tiersStatus.enrichment_product) this.tiersForm.product = this.tiersStatus.enrichment_product;
         if (this.tiersStatus.enrichment_bp_model) this.tiersForm.bp_model = this.tiersStatus.enrichment_bp_model;
+        const core = this.tiersStatus.enrichment_core_config || {};
+        if (core.core_source) this.tiersForm.core_source = core.core_source;
+        if (core.core_lists) this.tiersForm.core_lists = core.core_lists;
+        if (core.project_id) this.tiersForm.project_id = core.project_id;
+        if (core.core_keywords?.length) this.tiersForm.core_keywords = core.core_keywords.join('\n');
       } catch (e) { this.tiersStatus = {}; }
     },
 
@@ -1982,11 +2174,13 @@ function keywordResearch() {
       const data = await res.json();
       if (data.target_site) this.settings.target_site = data.target_site;
       if (data.target_country) this.settings.target_country = data.target_country;
-      if (data.filters) this.settings.filters = { ...this.settings.filters, ...data.filters };
+      if (data.setup_completed) this.settings.setup_completed = true;
       if (data.rank_tracker_project_id) this.settings.rank_tracker_project_id = data.rank_tracker_project_id;
       if (data.rank_tracker_tags) this.settings.rank_tracker_tags = data.rank_tracker_tags;
-      this.rankTrackerTagsText = (this.settings.rank_tracker_tags || []).join(', ');
+      if (data.filters) this.settings.filters = { ...this.settings.filters, ...data.filters };
       this.excludeTermsText = (this.settings.filters.exclude_terms || []).join(', ');
+      this.rankTrackerTagsText = (this.settings.rank_tracker_tags || []).join(', ');
+      this.wizardCompetitorsText = (data.competitors || []).join('\n');
       if (data.competitors) this.settings.competitors = data.competitors;
     },
     
@@ -1998,6 +2192,7 @@ function keywordResearch() {
           target_country: this.settings.target_country,
           filters: this.settings.filters,
           competitors: this.settings.competitors,
+          setup_completed: this.settings.setup_completed,
           rank_tracker_project_id: this.settings.rank_tracker_project_id,
           rank_tracker_tags: this.settings.rank_tracker_tags
         })
