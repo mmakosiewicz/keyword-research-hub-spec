@@ -842,13 +842,13 @@ def master_results():
     session_map = {}  # session_id -> tab
     for tab in tabs:
         cur.execute(
-            "SELECT id FROM kr_sessions WHERE tab = %s AND status = 'completed' ORDER BY started_at DESC LIMIT 1",
+            "SELECT id, COALESCE(completed_at, started_at) AS observed_at FROM kr_sessions WHERE tab = %s AND status = 'completed' ORDER BY started_at DESC LIMIT 1",
             (tab,),
         )
         row = cur.fetchone()
         if row:
             session_ids.append(row["id"])
-            session_map[row["id"]] = tab
+            session_map[row["id"]] = {"tab": tab, "observed_at": row.get("observed_at")}
 
     if not session_ids:
         conn.close()
@@ -869,29 +869,89 @@ def master_results():
         "breakout": "Breakout",
         "targets": "Tracker",
     }
-    merged = {}  # keyword -> row dict
+    merged = {}  # keyword -> lossless merged row
     for row in all_rows:
         kw = row["keyword"]
-        tab = session_map.get(row["session_id"], "")
+        session_info = session_map.get(row["session_id"], {})
+        tab = session_info.get("tab", "")
         label = TAB_LABELS.get(tab, tab)
+        observed_at = session_info.get("observed_at")
+        extra = row.get("extra") or {}
+        if isinstance(extra, str):
+            try: extra = json.loads(extra)
+            except Exception: extra = {}
+        competitors = row.get("competitors") or []
+        if isinstance(competitors, str):
+            try: competitors = json.loads(competitors)
+            except Exception: competitors = []
 
+        evidence = {
+            "source": label, "observed_at": observed_at.isoformat() if observed_at else None,
+            "volume": row.get("volume"), "traffic_potential": row.get("traffic_potential"),
+            "difficulty": row.get("difficulty"), "position": row.get("position"),
+            "ranking_url": row.get("ranking_url"), "parent_topic": row.get("parent_topic"),
+            "trend_3m": row.get("trend_3m"), "trend_6m": row.get("trend_6m"),
+            "volume_history": row.get("volume_history"), "competitors": competitors,
+            "extra": extra,
+        }
         if kw not in merged:
-            # Use first occurrence (sorted by the requested column)
             merged[kw] = dict(row)
-            merged[kw]["tabs"] = [label]
-            merged[kw]["tab_count"] = 1
+            merged[kw].update({
+                "tabs": [label], "tab_count": 1, "source_evidence": {label: evidence},
+                "action_signals": [], "_freshest_at": observed_at,
+                "trend_source": label if row.get("trend_3m") is not None or row.get("trend_6m") is not None else None,
+            })
         else:
-            # Merge: add tab source, prefer data with position
-            if label not in merged[kw]["tabs"]:
-                merged[kw]["tabs"].append(label)
-                merged[kw]["tab_count"] = len(merged[kw]["tabs"])
-            # If existing has no position but this one does, update
-            if merged[kw]["position"] is None and row["position"] is not None:
-                merged[kw]["position"] = row["position"]
-                merged[kw]["ranking_url"] = row["ranking_url"]
-            # Keep higher volume if different
-            if (row["volume"] or 0) > (merged[kw]["volume"] or 0):
-                merged[kw]["volume"] = row["volume"]
+            item = merged[kw]
+            if label not in item["tabs"]:
+                item["tabs"].append(label)
+                item["tab_count"] = len(item["tabs"])
+            item["source_evidence"][label] = evidence
+            # Best value per metric.
+            if (row.get("volume") or 0) > (item.get("volume") or 0):
+                item["volume"] = row.get("volume")
+            if (row.get("traffic_potential") or 0) > (item.get("traffic_potential") or 0):
+                item["traffic_potential"] = row.get("traffic_potential")
+            if row.get("position") is not None and (item.get("position") is None or row["position"] < item["position"]):
+                item["position"] = row["position"]
+                item["ranking_url"] = row.get("ranking_url")
+            # Freshest non-null contextual metrics.
+            freshest = item.get("_freshest_at")
+            is_fresher = observed_at is not None and (freshest is None or observed_at >= freshest)
+            if is_fresher:
+                item["_freshest_at"] = observed_at
+                for field in ("difficulty", "cpc_cents", "parent_topic", "parent_topic_kd"):
+                    if row.get(field) is not None: item[field] = row.get(field)
+            if (row.get("trend_3m") is not None or row.get("trend_6m") is not None) and is_fresher:
+                item["trend_3m"] = row.get("trend_3m")
+                item["trend_6m"] = row.get("trend_6m")
+                item["volume_history"] = row.get("volume_history")
+                item["trend_source"] = label
+
+        # Preserve every source-specific decision signal separately.
+        item = merged[kw]
+        if tab == "targets":
+            pos = row.get("position")
+            category = "update" if pos is not None and 3 <= pos <= 10 else "rewrite" if pos is None or pos >= 11 else None
+            if category:
+                item["action_signals"].append({"type": category, "source": label,
+                    "label": "Update" if category == "update" else "Rewrite"})
+            item["position_change_30d"] = extra.get("pos_delta_30d")
+            item["previous_position"] = extra.get("prev_position")
+            item["tracker_tags"] = extra.get("tags") or []
+        elif tab == "breakout":
+            status = extra.get("status")
+            if status in ("breakout", "cannibalization"):
+                item["action_signals"].append({"type": status, "source": label,
+                    "label": "Breakout" if status == "breakout" else "Cannibalization"})
+            item["other_url"] = extra.get("other_url")
+            item["other_position"] = extra.get("other_position")
+        elif tab == "content_gap":
+            item["gap_competitors"] = competitors
+
+    # Internal merge bookkeeping must not leak through the API.
+    for item in merged.values():
+        item.pop("_freshest_at", None)
 
     # Filter out "nope" blacklisted keywords
     show_nope = request.args.get("show_nope", "false") == "true"
