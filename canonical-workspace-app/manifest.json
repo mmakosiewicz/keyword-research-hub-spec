@@ -2,24 +2,15 @@
   "title": "Keyword Research Hub",
   "blueprint_name": "letaido_keyword_research_hub",
   "legacy_blueprint_names": ["keyword_research"],
-  "database": {
-    "framework": "postgresql_bootstrap",
-    "tables": ["kr_settings", "kr_seeds", "kr_targets", "kr_sessions", "kr_results", "kr_keyword_lists", "kr_tier_runs"]
-  },
+  "database": {"framework": "postgresql_bootstrap", "tables": ["kr_settings", "kr_seeds", "kr_targets", "kr_sessions", "kr_results", "kr_keyword_lists", "kr_tier_runs"]},
   "connectors": [
     {"connector_id": "ahrefs_keywords_explorer.ideas_by_terms_export", "secret_name": "ahrefs_oauth", "surface": "console", "approval_hint": "Approve all reads from this Ahrefs secret to cover the app's research workflows."},
     {"connector_id": "ahrefs_keywords_explorer.keywords_overview_by_terms_export", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_keywords_explorer.keywords_overview_by_page_or_domain", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_site_explorer.organic_keywords", "secret_name": "ahrefs_oauth", "surface": "console"},
-    {"connector_id": "ahrefs_site_explorer.organic_positions_export", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_rank_tracker.list_projects", "secret_name": "ahrefs_oauth", "surface": "console"},
     {"connector_id": "ahrefs_rank_tracker.overview_keywords_export", "secret_name": "ahrefs_oauth", "surface": "console"}
   ],
   "runtime": {"llm_proxy": true, "python_packages": ["numpy", "scikit-learn", "requests", "psycopg2"]},
-  "canonical_files": [
-    "applications/letaido_keyword_research_hub.py",
-    "applications/_letaido_keyword_research_hub_tiers.py",
-    "applications/_letaido_keyword_research_hub_setup.py",
-    "templates/keyword_research/index.html"
-  ]
+  "canonical_files": ["applications/letaido_keyword_research_hub.py", "applications/_letaido_keyword_research_hub_tiers.py", "applications/_letaido_keyword_research_hub_setup.py", "templates/keyword_research/index.html"]
 }
