@@ -1,0 +1,9 @@
+Flask==3.1.2
+Flask-SQLAlchemy==3.1.1
+Flask-WTF==1.2.2
+psycopg2-binary==2.9.10
+pydantic==2.11.7
+requests==2.32.4
+numpy==2.2.6
+scikit-learn==1.7.1
+gunicorn==23.0.0
