@@ -1173,6 +1173,21 @@
                 <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground">Business potential</div><div class="text-lg font-bold mt-1" x-text="masterSelectedKeyword?.bp ?? '—'"></div></div>
               </div>
               <div>
+                <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-2">Recommended actions</div>
+                <div class="flex flex-wrap gap-1.5">
+                  <template x-for="signal in (masterSelectedKeyword?.action_signals || [])" :key="signal.type + signal.source">
+                    <span class="px-2 py-1 rounded-md text-xs font-semibold" :class="masterActionClass(signal.type)" x-text="`${signal.label} · ${signal.source}`"></span>
+                  </template>
+                  <span x-show="!(masterSelectedKeyword?.action_signals || []).length" class="text-sm text-muted-foreground">No workflow action signal.</span>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground">Traffic potential</div><div class="text-lg font-bold mt-1" x-text="fmtNum(masterSelectedKeyword?.traffic_potential)"></div></div>
+                <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground">3m trend</div><div class="text-lg font-bold mt-1" :class="trendClass(masterSelectedKeyword?.trend_3m)" x-text="masterSelectedKeyword?.trend_3m == null ? '—' : fmtTrend(masterSelectedKeyword.trend_3m)"></div></div>
+                <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground">30d rank change</div><div class="text-lg font-bold mt-1" x-text="masterSelectedKeyword?.position_change_30d == null ? '—' : (masterSelectedKeyword.position_change_30d > 0 ? '+' : '') + masterSelectedKeyword.position_change_30d"></div></div>
+                <div class="rounded-lg bg-slate-50 p-3"><div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground">Parent topic</div><div class="text-sm font-semibold mt-1 truncate" :title="masterSelectedKeyword?.parent_topic" x-text="masterSelectedKeyword?.parent_topic || '—'"></div></div>
+              </div>
+              <div>
                 <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-1.5">Topical classification</div>
                 <div class="flex items-center gap-2 mb-2">
                   <span class="inline-flex px-2 py-1 rounded-full text-xs font-semibold" :class="masterTierPill(masterSelectedKeyword?.tier)" x-text="masterTierName(masterSelectedKeyword?.tier)"></span>
@@ -1190,10 +1205,23 @@
                 <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-1.5">List</div>
                 <span class="inline-flex px-2 py-1 rounded-md bg-slate-100 text-slate-700 text-xs font-medium" x-text="masterSelectedKeyword?._list"></span>
               </div>
+              <div x-show="masterSelectedKeyword?.gap_competitors?.length">
+                <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-2">Content-gap evidence</div>
+                <div class="space-y-2"><template x-for="comp in masterSelectedKeyword.gap_competitors" :key="comp.domain + comp.url"><div class="rounded-lg border border-slate-200 p-2 text-xs"><div class="font-semibold" x-text="comp.domain"></div><div class="text-slate-500 mt-0.5" x-text="`Position ${comp.position || '—'} · Traffic ${fmtNum(comp.traffic)}`"></div><a :href="comp.url" target="_blank" rel="noopener" class="text-primary hover:underline break-all" x-text="comp.url"></a></div></template></div>
+              </div>
+              <div x-show="masterSelectedKeyword?.other_url">
+                <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-1.5">Cannibalizing page</div>
+                <a :href="masterSelectedKeyword?.other_url" target="_blank" rel="noopener" class="text-sm text-primary hover:underline break-all" x-text="masterSelectedKeyword?.other_url"></a>
+                <span class="text-xs text-muted-foreground ml-1" x-text="masterSelectedKeyword?.other_position ? '#' + masterSelectedKeyword.other_position : ''"></span>
+              </div>
               <div x-show="masterSelectedKeyword?.ranking_url">
                 <div class="text-[10px] uppercase tracking-wide font-bold text-muted-foreground mb-1.5">Ranking URL</div>
                 <a :href="masterSelectedKeyword?.ranking_url" target="_blank" rel="noopener" class="text-sm text-primary hover:underline break-all" x-text="masterSelectedKeyword?.ranking_url"></a>
               </div>
+              <details x-show="masterSelectedKeyword?.source_evidence" class="border-t border-slate-200 pt-4">
+                <summary class="text-xs font-semibold text-slate-600 cursor-pointer">Source provenance</summary>
+                <div class="mt-2 space-y-2"><template x-for="(evidence, source) in (masterSelectedKeyword?.source_evidence || {})" :key="source"><div class="rounded-lg bg-slate-50 p-2 text-xs"><strong x-text="source"></strong><span class="text-slate-500 ml-1" x-text="`Vol ${fmtNum(evidence.volume)} · Pos ${evidence.position || '—'} · TP ${fmtNum(evidence.traffic_potential)}`"></span></div></template></div>
+              </details>
             </div>
           </div>
         </aside>
@@ -1227,6 +1255,8 @@
               <th class="px-4 py-2.5 sortable text-right" :class="masterSortClass('difficulty')" @click="toggleMasterSort('difficulty')">KD</th>
               <th class="px-4 py-2.5 sortable text-center" :class="masterSortClass('tier')" @click="toggleMasterSort('tier')">Tier</th>
               <th class="px-4 py-2.5 sortable text-center" :class="masterSortClass('bp')" @click="toggleMasterSort('bp')">BP</th>
+              <th class="px-4 py-2.5 text-center">Trend</th>
+              <th class="px-4 py-2.5">Action</th>
               <th class="px-4 py-2.5">Cluster</th>
               <th class="px-4 py-2.5 sortable text-right" :class="masterSortClass('position')" @click="toggleMasterSort('position')">Position</th>
               <th class="px-4 py-2.5">URL</th>
@@ -1241,7 +1271,7 @@
                 </td>
                 <td class="px-4 py-2.5">
                   <div class="flex items-center gap-2">
-                    <span x-text="r.keyword"></span>
+                    <button @click="showMasterKeyword(r)" class="text-left hover:text-primary hover:underline" x-text="r.keyword"></button>
                     <span x-show="r._list" class="px-1.5 py-0.5 text-[10px] rounded font-medium"
                           :class="{
                             'bg-green-500/20 text-green-400': r._list === 'pitch',
@@ -1266,6 +1296,19 @@
                   <span x-show="r.bp === 1" class="text-muted-foreground" title="Low BP">1</span>
                   <span x-show="r.bp === 0" class="text-muted-foreground/40" title="No BP">0</span>
                   <span x-show="r.bp == null" class="text-muted-foreground/30">—</span>
+                </td>
+                <td class="px-4 py-2.5 text-center text-xs tabular-nums">
+                  <span :class="trendClass(r.trend_3m)" x-text="r.trend_3m == null ? '—' : fmtTrend(r.trend_3m)"></span>
+                  <span x-show="r.trend_3m != null" class="block text-[9px] text-muted-foreground">3m</span>
+                </td>
+                <td class="px-4 py-2.5">
+                  <div class="flex flex-wrap gap-1 min-w-[105px]">
+                    <template x-for="signal in (r.action_signals || [])" :key="signal.type + signal.source">
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                            :class="masterActionClass(signal.type)" x-text="signal.label"></span>
+                    </template>
+                    <span x-show="!(r.action_signals || []).length" class="text-muted-foreground/30">—</span>
+                  </div>
                 </td>
                 <td class="px-4 py-2.5 text-xs text-muted-foreground max-w-[140px] truncate" x-text="r.cluster || '—'" :title="r.cluster"></td>
                 <td class="px-4 py-2.5 text-right tabular-nums">
@@ -2102,6 +2145,21 @@ function keywordResearch() {
     showMasterMap() {
       this.masterView = 'map';
       this.$nextTick(() => this.drawMasterMap());
+    },
+
+    showMasterKeyword(row) {
+      this.masterSelectedKeyword = row;
+      this.masterView = 'map';
+      this.$nextTick(() => this.drawMasterMap());
+    },
+
+    masterActionClass(type) {
+      return ({
+        update:'bg-blue-50 text-blue-700',
+        rewrite:'bg-orange-50 text-orange-700',
+        breakout:'bg-emerald-50 text-emerald-700',
+        cannibalization:'bg-rose-50 text-rose-700'
+      })[type] || 'bg-slate-100 text-slate-700';
     },
 
     masterTierName(tier) {
