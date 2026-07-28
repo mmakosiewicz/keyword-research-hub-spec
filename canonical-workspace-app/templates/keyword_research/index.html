@@ -381,6 +381,13 @@
     </div>
   </div>
 
+  <!-- Workflow warnings: partial connector failures preserve successful data. -->
+  <div x-show="selectedSession?.summary?.warning_count > 0" class="rounded-lg border border-amber-200 bg-amber-50 p-3 mb-4 text-sm text-amber-900">
+    <strong x-text="`${selectedSession.summary.warning_count} Ahrefs warning(s)`"></strong>
+    <span> — successful results were saved.</span>
+    <details class="mt-1"><summary class="cursor-pointer text-xs font-semibold">Show details</summary><ul class="list-disc ml-5 mt-1 text-xs"><template x-for="w in (selectedSession.summary.warnings || [])" :key="w"><li x-text="w"></li></template></ul></details>
+  </div>
+
   <!-- Tab 1: Keyword Discovery -->
   <div x-show="activeTab === 'discovery'">
     <div class="mb-5">
@@ -2395,6 +2402,7 @@ function keywordResearch() {
       
       if (job.status === 'failed') {
         this.isRunning = false;
+        this.jobProgress = job.progress || job.error || 'Ahrefs workflow failed.';
         return;
       }
       
